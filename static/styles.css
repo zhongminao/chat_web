@@ -1,0 +1,273 @@
+:root {
+  color-scheme: light;
+  --bg: #f5f7fb;
+  --card: #ffffff;
+  --line: #dbe2f0;
+  --text: #1f2937;
+  --muted: #6b7280;
+  --primary: #2563eb;
+  --primary-soft: #e8f0ff;
+  --user: #1f2937;
+  --user-text: #f9fafb;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: linear-gradient(180deg, #f7f9fc 0%, #f2f5fa 100%);
+  color: var(--text);
+}
+
+
+
+button,
+textarea {
+  font: inherit;
+}
+
+.page {
+  padding: 32px;
+}
+
+.card {
+  width: min(1170px, 100%);
+  margin: 0 auto;
+  padding: 31px;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: var(--card);
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.08);
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 21px;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 44px;
+}
+
+.secondary-button {
+  padding: 13px 18px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.model-selector {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.model-selector select {
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  max-width: 220px;
+}
+
+.model-selector select:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.chat-box {
+  margin-top: 23px;
+  padding: 23px;
+  min-height: 468px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: #f9fbff;
+}
+
+.message-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.user-row {
+  align-items: flex-end;
+}
+
+.message-role {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.bubble {
+  max-width: 78%;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px 18px 18px 8px;
+  background: #fff;
+  line-height: 1.7;
+  white-space: pre-wrap;
+}
+
+.user-bubble {
+  border-color: transparent;
+  border-radius: 18px 18px 8px 18px;
+  background: var(--user);
+  color: var(--user-text);
+}
+
+.composer {
+  position: relative;
+  margin-top: 23px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #fff;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.composer:focus-within {
+  border-color: rgba(37, 99, 235, 0.55);
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.1);
+}
+
+.composer textarea {
+  width: 100%;
+  min-height: 135px;
+  resize: none;
+  padding: 2px 151px 55px 2px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  line-height: 1.7;
+}
+
+.primary-button {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  min-width: 114px;
+  padding: 13px 23px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--primary);
+  color: #fff;
+  cursor: pointer;
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.22);
+  transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.primary-button:hover:not(:disabled) {
+  background: #1d4ed8;
+  box-shadow: 0 10px 22px rgba(37, 99, 235, 0.28);
+  transform: translateY(-1px);
+}
+
+.primary-button:disabled {
+  cursor: not-allowed;
+  background: #cbd5e1;
+  box-shadow: none;
+  color: #64748b;
+  opacity: 1;
+}
+
+@media (max-width: 720px) {
+  .page {
+    padding: 16px;
+  }
+
+  .card {
+    padding: 21px;
+  }
+
+  .header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .bubble {
+    max-width: 90%;
+  }
+}
+
+/*  系统提示词部分   */
+
+.system-panel {
+  margin-top: 20px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--primary-soft);
+}
+
+.system-panel-title {
+  display: flex;                    /* 让标题文字和「恢复默认」按钮横向并排 */
+  align-items: center;              /* 两者垂直居中对齐 */
+  justify-content: space-between;   /* 两端对齐：文字靠左，按钮靠右 */
+  gap: 12px;
+  margin-bottom: 10px;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+/* 面板内的「恢复默认」小按钮
+   没有复用 .secondary-button，是因为那个尺寸偏大（padding: 13px 18px），
+   放在面板标题栏里会把整行撑高，视觉上抢了标题的主次。 */
+.link-button {
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--primary);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;              /* 禁止「恢复默认」四个字被挤成两行 */
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.link-button:hover:not(:disabled) {
+  background: var(--primary-soft);
+  border-color: rgba(37, 99, 235, 0.45);
+}
+
+/* disabled 状态由 JSX 里的 disabled={...} 控制，这里只负责“变灰”的视觉反馈 */
+.link-button:disabled {
+  cursor: not-allowed;
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+.system-panel textarea {
+  width: 100%;
+  min-height: 120px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--text);
+  line-height: 1.7;
+  resize: vertical;
+  outline: none;
+}
+
+.system-panel-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
