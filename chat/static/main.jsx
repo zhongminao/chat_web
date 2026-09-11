@@ -73,13 +73,14 @@ function App() {
      好判断点击是不是发生在菜单外面（点外面要关掉菜单）。
      用 useState 存 DOM 节点也行，但每次赋值都会多渲染一次，纯属浪费。 */
   const modelMenuRef = useRef(null);
-  /* chip 自己的 DOM 引用。用途：菜单里的某个选项被点掉之后，那个按钮就从 DOM
+  /* 正文输入框的 DOM 引用。用途：菜单里的某个选项被点掉之后，那个按钮就从 DOM
      里消失了，浏览器的焦点会掉回 <body> —— 表现就是外框的蓝色「啪」一下掉回
-     灰色。选完要把焦点接回输入框内部，外框才能一直保持蓝色。
-     接回的目标是**正文输入框**而不是 chip 自己：选完模型的下一步就是打字，
-     焦点头在输入框里省一次点击。（DSH 那种把焦点还给触发按钮的做法更适合
-     普通表单，对聊天框不合适。） */
-  const modelChipRef = useRef(null);
+     灰色。选完把焦点接回输入框，焦点就一直留在卡片内部，外框保持蓝色。
+     接回的目标特意是**正文输入框**而不是 chip 自己：选完模型的下一步就是打字，
+     焦点落在输入框里省一次点击。（DSH 那种把焦点还给触发按钮的做法更适合
+     普通表单，对聊天框不合适。）
+     注：这里曾经还有一个 modelChipRef（指 chip 自己），改用这个方案后它就只挂
+     在 DOM 上没人读了，属于死代码，已删。 */
   const composerInputRef = useRef(null);
   useEffect(() => {
     fetch("/api/providers")
@@ -508,7 +509,6 @@ function App() {
               <button
                 type="button"
                 className="model-chip"
-                ref={modelChipRef}
                 onClick={() => {
                   setIsMenuOpen((open) => !open);
                   setMenuPane("root");          // 每次重新打开都从一级菜单开始
