@@ -9,7 +9,7 @@ python -m chat                 # http://127.0.0.1:8200
 systemctl --user restart chat  # 以服务常驻时；日志见 journalctl --user -u chat -f
 ```
 
-- 运行时配置：`~/.config/chat/chat.env`（`CHAT_ALLOW_TOOLS` 控制服务端工具模式）
+- 运行时配置：`~/.config/chat/chat.env`（`chat.service` 的 `EnvironmentFile`，当前无变量）
 - 模型目录：`llm_client/providers.yaml`，改完**不用重启**（每次请求重读）
 - `static/theme/` 是 DSH 上游 token 的逐字拷贝（MIT，许可见其中的 `LICENSE`，别删）。
   **别手改** —— 配色改 `styles.css`，或在自己的表里覆盖同名变量

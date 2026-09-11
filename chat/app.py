@@ -82,23 +82,6 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 # 真需要应用层密码时（比如换隧道方式、或要直接暴露端口），见 git 历史取回。
 
 
-def tools_allowed() -> bool:
-    """服务端是否允许工具模式。
-
-    这是**服务端**的开关，和前端那个勾选框是两码事：tools_enabled 是请求体里
-    的字段，客户端想传 true 就传 true。所以只要这个进程能被别人访问，就必须在
-    这里掐一道，不能信任客户端。
-
-    为什么重要：开了工具模式，模型就能调用 run_bash，而 run_bash 是
-    subprocess.run(shell=True) —— 等于把 shell 交出去。暴露到公网时把
-    CHAT_ALLOW_TOOLS 设成 false，这一条路就直接断掉，最坏情况退化成
-    「别人蹭你的 API 额度」，而不是「你的机器被人控制」。
-
-    默认 true（保持本地使用的手感不变），只在 env 里显式关掉才生效。
-    """
-    return os.getenv("CHAT_ALLOW_TOOLS", "true").strip().lower() not in ("0", "false", "no", "off")
-
-
 def load_env_value_from_bashrc(
     key_name: str,
     ) -> None:
@@ -215,14 +198,12 @@ def request_real_reply(
         model_name=payload.model_name,
         temperature=temperature,
     )
-    # 工具开关在服务端再判一次：客户端传什么都以这里的结论为准。
-    tools_enabled = payload.tools_enabled and tools_allowed()
     normalized_messages = normalize_messages(
         payload.messages,
         payload.system_prompt,
-        tools_enabled=tools_enabled,
+        tools_enabled=payload.tools_enabled,
     )
-    if tools_enabled:
+    if payload.tools_enabled:
         # agent 模式：多轮工具调用，直到模型直接回答；返回 (最终文本, 工具流水账)
         return run_agent_turn(client, normalized_messages)
 
