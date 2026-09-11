@@ -1,0 +1,31 @@
+本目录下的 4 个 CSS 文件逐字拷贝自 DeepSeek Harness：
+  https://github.com/deepseek-ai/deepseek-harness
+  packages/client/ui-theme/src/styles/{base,design-platform,scrollbar,gradient-shadow-text}.css
+
+上游以 MIT 协议发布。按 MIT 的要求，版权声明与许可正文随拷贝一并保留如下。
+
+（放这个文件的用处：MIT 的条件是「所有拷贝或实质部分都必须包含版权声明和本许可
+声明」。上游那 4 个文件自身头部没有带任何授权字样，所以拷贝过来之后必须另外附一份。）
+
+------------------------------------------------------------------------------
+MIT License
+
+Copyright (c) 2026 DeepSeek
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

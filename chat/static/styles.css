@@ -1,109 +1,548 @@
-:root {
-  color-scheme: light;
-  --bg: #f5f7fb;
-  --card: #ffffff;
-  --line: #dbe2f0;
-  --text: #1f2937;
-  --muted: #6b7280;
-  --primary: #2563eb;
-  --primary-soft: #e8f0ff;
-  --user: #1f2937;
-  --user-text: #f9fafb;
-}
+/* ============================================================================
+ * chat 应用样式表（DSH 对齐版）
+ * ----------------------------------------------------------------------------
+ * 颜色/阴影/字体一律走 theme.css 引入的 --dsw-* token，本文件不含任何硬编码
+ * 色值（箭头、对勾这些图形也用 CSS 边框拼，靠 currentcolor 跟着 token 走）。
+ *
+ * 几何参数不是拍脑袋来的，逐条对着上游抄：
+ *   Button（胶囊按钮）      packages/client/ui-primitives/src/Button.module.css
+ *   Input（输入框）         packages/client/ui-primitives/src/Input.module.css
+ *   模型选择器（chip）      packages/client/ui-model-selection/src/client/ModelSelect.module.css
+ *   用户气泡 / 正文列       packages/client/ui-conversation/src/client/chat/MessageItem.module.css
+ *   输入卡片 / 正文宽度轴   packages/client/ui-conversation/src/client/skeleton/{InputBar,ConversationRoot}.module.css
+ *   工具行 / 展开行         packages/client/ui-tool + ui-primitives/src/DisclosureRow.module.css
+ *   「正在思考」扫光        packages/client/ui-conversation/src/client/chat/ChatView.module.css(.turnStatus)
+ *
+ * 想微调外观时，**改 token 不要改这里**：token 一改，将来能整体跟着上游走；
+ * 这里写死的像素，改了就跟上游脱钩了。
+ * ========================================================================== */
 
 * {
   box-sizing: border-box;
 }
 
-html,
-body {
-  margin: 0;
-  min-height: 100%;
-  font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  background: linear-gradient(180deg, #f7f9fc 0%, #f2f5fa 100%);
-  color: var(--text);
-}
-
-
-
-button,
-textarea {
-  font: inherit;
-}
-
+/* ---------------------------------------------------------------------------
+ * 外壳：全高应用框架
+ * --------------------------------------------------------------------------
+ * 原来是「页面里放一张居中卡片」；现在跟 DSH 一样是占满视口的纵向三段式：
+ * 顶栏（不滚）→ 正文（自己滚）→ 输入卡片（不滚）。
+ * 滚动交给正文区而不是整页，这样顶栏和输入框在长对话里始终在位。
+ * ------------------------------------------------------------------------- */
 .page {
-  padding: 32px;
+  height: 100%;
+  margin: 0;
 }
 
 .card {
-  width: min(1170px, 100%);
-  margin: 0 auto;
-  padding: 31px;
-  border: 1px solid var(--line);
-  border-radius: 24px;
-  background: var(--card);
-  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.08);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;              /* flex 子项默认 min-height:auto 会撑破容器，必须归零 */
+  padding: 0 var(--dsh-composer-side-clearance);
+  background: var(--dsw-alias-bg-base);
 }
 
+/* ---------------------------------------------------------------------------
+ * 顶栏
+ * --------------------------------------------------------------------------
+ * 对应上游 ConversationRoot 的 header：内容行 32px 高，底部一条分隔线。
+ * 这里放的是「标题 + 模型选择 + 三个操作」，比上游的会话头多几个控件，
+ * 所以留 8px 内边距让整条到 48px 左右，视觉比例和上游一致。
+ * ------------------------------------------------------------------------- */
 .header {
+  flex: none;
   display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 21px;
+  flex-wrap: wrap;            /* 窄屏（手机）时控件自动换行，不会横向溢出 */
+  align-items: center;
+  gap: 4px;
+  min-height: 48px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
 }
 
 .header h1 {
-  margin: 0;
-  font-size: 44px;
+  /* 上游的会话标题就是 14px（--dsw-font-s-strong-14）；
+     应用标题抬到 15px/600，留一点层级差即可，别做成 44px 那种巨无霸。 */
+  margin: 0 auto 0 0;         /* 右边自适应撑开，把后面的控件推到右侧 */
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 22px;
+  color: var(--dsw-alias-label-primary);
+  white-space: nowrap;
 }
 
+/* ---------------------------------------------------------------------------
+ * 按钮
+ * --------------------------------------------------------------------------
+ * 上游 Button 有两种尺寸：md = 36px 高 / r18（主操作），sm = 28px 高 / r14
+ * （密集行里的次操作）。顶栏里放的是次要操作，用 sm。
+ * 注意「主按钮」在上游是**近黑色胶囊**（--dsw-alias-button-primary-fill
+ * 指向 --dsw-alias-brand-primary，浅色下是 neutral-bluish-1000），
+ * 不是原来那种蓝色 #2563eb —— 这是跟 DSH 观感差别最大的一处。
+ * ------------------------------------------------------------------------- */
 .secondary-button {
-  padding: 13px 18px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: #fff;
-  color: var(--text);
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
   cursor: pointer;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out);
 }
 
-.model-selector {
+.secondary-button:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* ---------------------------------------------------------------------------
+ * 模型 chip + 二级弹出菜单
+ * --------------------------------------------------------------------------
+ * 结构：发送按钮左边一个灰色 chip 显示当前模型名，点开是「模型 / 温度」两格，
+ * 点「模型」进二级页按供应商分区列出模型，点「温度」进温度档位页。
+ *
+ * 规格照抄上游两处：
+ *   ModelSelect.module.css —— chip（28px/r24/13px-500）、菜单卡片、两格 cell
+ *   Menu.module.css        —— 菜单卡片材质（r12 / inverted 细描边 / shadow-lv3）
+ * 菜单向上弹（bottom: 100% + 8px）也是上游的写法：它挂在输入卡片底部，
+ * 往下弹会跑出屏幕。
+ * ------------------------------------------------------------------------- */
+.model-menu {
+  position: relative;      /* 给绝对定位的弹出层当坐标基准 */
+  display: inline-flex;
+  min-width: 0;
+}
+
+/* 触发 chip。这块样式原来挂在 .model-selector select 上（原生 <select>），
+   现在换成真正的 <button>，几何沿用，只是箭头改成用 CSS 边框画 ——
+   data URI 里的 SVG 读不到 currentColor，烘死颜色就跟着 token 走不了了，
+   用边框拼的箭头没这个问题。 */
+.model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 220px;
+  height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 24px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  cursor: pointer;
+  transition: background-color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+.model-chip:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.model-chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--dsw-alias-border-l3);
+}
+
+.model-chip:disabled {
+  color: var(--dsw-alias-label-dimmed);
+  cursor: default;
+}
+
+.model-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 跟在模型名后面的温度值：上游这个位置放的是 effort，用 caption 色 */
+.model-chip-temp {
+  flex: none;
+  color: var(--dsw-alias-label-caption);
+}
+
+/* 向下的小箭头，两条边框拼成（currentcolor，自动跟随 token 变色） */
+.model-chip-chevron {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  margin-top: -2px;
+  border-right: 1.5px solid currentcolor;
+  border-bottom: 1.5px solid currentcolor;
+  transform: rotate(45deg);
+}
+
+/* 弹出卡片：r12、inverted 细描边、--dsw-specific-menu 底色、shadow-lv3 */
+.model-popup {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  width: min(240px, calc(100vw - 32px));
+  padding: 4px;
+  border: 1px solid var(--dsw-alias-border-inverted);
+  border-radius: 12px;
+  background: var(--dsw-specific-menu);
+  box-shadow: var(--dsw-shadow-lv3);
+  color: var(--dsw-alias-label-primary);
+  /* 浮层是高一级的表面，滚动条滑块跟着换到 l2 那一组 token */
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+}
+
+/* 菜单内容区。滚动放在这一层而不是 .model-popup 上：百分比 max-height 需要
+   父级有确定高度才算得出来，写在卡片上会失效；这里直接给一个跟视口挂钩的
+   上限，行为可预期。 */
+.model-pane {
+  display: flex;
+  flex-direction: column;
+  max-height: min(320px, 50vh);
+  overflow-y: auto;
+}
+
+/* 一级菜单的两格：左标签、右当前值、末尾一个「›」 */
+.model-cell {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-top: 8px;
-}
-
-.model-selector select {
-  padding: 9px 12px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: #fff;
-  color: var(--text);
-  font: inherit;
+  gap: 8px;
+  width: 100%;
+  height: 40px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  line-height: 22px;
+  text-align: left;
   cursor: pointer;
-  max-width: 220px;
 }
 
-.model-selector select:disabled {
+.model-cell:hover,
+.model-cell:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.model-cell-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.model-cell-value {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-cell-chevron {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-top: 1.5px solid currentcolor;
+  border-right: 1.5px solid currentcolor;
+  color: var(--dsw-alias-label-tertiary);
+  transform: rotate(45deg);
+}
+
+/* 二级页顶部的「返回」。手机上没有 Esc 键，这个按钮是唯一的退路。 */
+.model-back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.model-back:hover,
+.model-back:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.model-back-arrow {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-bottom: 1.5px solid currentcolor;
+  border-left: 1.5px solid currentcolor;
+  transform: rotate(45deg);
+}
+
+.model-group + .model-group {
+  margin-top: 4px;
+}
+
+/* 分区标题（供应商名）。sticky 让它在自己那一段滚动时粘在顶部 —— 上游同款 */
+.model-group-title {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 5px 8px 3px;
+  background: var(--dsw-specific-menu);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.model-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.model-option:hover,
+.model-option:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.model-option-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 选中态不填色，只靠右侧那个对勾 —— 上游就是这么处理的
+   （ModelSelect.module.css 里 .selected 是空的）。这条留白是为了将来真要加
+   视觉时有个明确的地方下手；不建议改成整行填色，那样就跟 DSH 不一样了。 */
+.model-option.is-selected {
+  background: transparent;
+}
+
+.model-option-check {
+  display: grid;
+  flex: 0 0 18px;
+  place-items: center;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* ---------------------------------------------------------------------------
+ * 工具模式开关
+ * --------------------------------------------------------------------------
+ * 上游没有 checkbox 组件，所以留原生控件，只对齐「行高 + 字号 + 强调色」：
+ * 28px 行高跟 chip、按钮同高，强调色取业务蓝（--dsw-alias-state-business-primary）
+ * 而不是主按钮那种近黑色 —— 勾选框太小，用近黑色会显得像禁用。
+ * ------------------------------------------------------------------------- */
+.tool-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tool-toggle input {
+  accent-color: var(--dsw-alias-state-business-primary);
+  cursor: pointer;
+}
+
+.tool-toggle input:disabled {
   cursor: not-allowed;
-  opacity: 0.7;
 }
 
+/*  系统提示词部分   */
+
+/* ---------------------------------------------------------------------------
+ * 系统提示词面板
+ * --------------------------------------------------------------------------
+ * 上游把这类「模块级设置区」放在 --dsw-alias-bg-module-platform（浅灰）上，
+ * 圆角 12px。宽度跟正文列同轴（748px 居中），展开/收起时正文不会横向跳动。
+ * ------------------------------------------------------------------------- */
+.system-panel {
+  flex: none;
+  width: 100%;
+  max-width: var(--dsh-chat-content-width);
+  margin: 12px auto 0;
+  padding: 12px 16px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-module-platform);
+}
+
+.system-panel-title {
+  display: flex;                    /* 让标题文字和「恢复默认」按钮横向并排 */
+  align-items: center;              /* 两者垂直居中对齐 */
+  justify-content: space-between;   /* 两端对齐：文字靠左，按钮靠右 */
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* 面板内的「恢复默认」小按钮
+   复用上游 Button 的 sm 尺寸（28px 高 / r14 / 12px 字），
+   跟顶栏那些次要按钮是同一套规格，视觉上自然成为一族。 */
+.link-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;              /* 禁止「恢复默认」四个字被挤成两行 */
+  cursor: pointer;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+.link-button:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* disabled 状态由 JSX 里的 disabled={...} 控制，这里只负责「变灰」的视觉反馈 */
+.link-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* 面板里的输入框对齐上游 Input：32px 起步、r8、l2 描边，聚焦时描边转主线色 */
+.system-panel textarea {
+  width: 100%;
+  min-height: 108px;
+  padding: 7px 9px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  outline: none;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  line-height: 22px;
+  resize: vertical;
+  transition: border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+/* 同上：这里原来也是 --dsw-alias-brand-primary（浅色下近黑）。
+   同一个页面里两处聚焦色应该一致，否则一边蓝一边黑很奇怪。 */
+.system-panel textarea:focus {
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+.system-panel-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* ---------------------------------------------------------------------------
+ * 正文区（滚动容器）
+ * --------------------------------------------------------------------------
+ * 上游的做法是「滚动条铺满 + 内容列居中」：滚动条贴窗口边，正文列 748px
+ * 居中。这里不加包裹层也做到了同一件事 —— 容器自己滚、每行各自
+ * max-width + margin auto 居中。
+ * 左右内边距 32px = 输入卡片的 16px 间隙 + 16px，这样正文列永远正好比
+ * 输入卡片窄 32px，「垫在下面」的关系在窄屏下也成立。
+ * ------------------------------------------------------------------------- */
 .chat-box {
-  margin-top: 23px;
-  padding: 23px;
-  min-height: 468px;
-  border: 1px solid var(--line);
-  border-radius: 20px;
-  background: #f9fbff;
+  flex: 1 1 auto;
+  min-height: 0;              /* 同上：不归零就滚不起来 */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px calc(var(--dsh-composer-side-clearance) + 16px) 16px;
+  /* 滚到底部时给输入卡片留出呼吸位；实际高度由下方 .composer 的 margin 配合 */
+  scroll-padding-bottom: 16px;
 }
 
+/* ---------------------------------------------------------------------------
+ * 空会话的首页（纯 CSS 实现，没有动 JSX）
+ * --------------------------------------------------------------------------
+ * 把外面那张卡片去掉之后，没消息时会剩下大片纯白，看起来像「页面坏了」。
+ * 上游对应的是 HeroShell：标题 26px/32、字重 500、主文字色，整块在
+ * 780px 宽的栈里居中。
+ * 这里用 :empty 判断空态 —— 一条消息都没有、也不在等待时，
+ * 用一个伪元素画出标题，不占用真实 DOM，也不需要新增状态。
+ * 注意 :empty 要求元素里连空白文本节点都没有；当前 JSX 在无消息且
+ * isLoading 为 false 时确实什么都不渲染，条件是成立的。
+ *
+ * 曾经这里还有第二行 ::after「按 Enter 发送，Shift + Enter 换行」，
+ * 已删除：输入框的 placeholder 写的就是同一句话，在同一屏里重复两遍是废话。
+ * 操作提示离操作本身越近越好，所以留下 placeholder 那一份。
+ * ------------------------------------------------------------------------- */
+.chat-box:empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-box:empty::before {
+  content: '有什么可以帮你的吗？';
+  color: var(--dsw-alias-label-primary);
+  font-size: 26px;
+  font-weight: 500;
+  line-height: 32px;
+  text-align: center;
+}
+
+/* ---------------------------------------------------------------------------
+ * 消息行
+ * --------------------------------------------------------------------------
+ * 上游正文列的节奏是「行间距统一 16px」，气泡与角色标签之间再收 6px。
+ * ------------------------------------------------------------------------- */
 .message-row {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 6px;
-  margin-bottom: 14px;
+  width: 100%;
+  max-width: var(--dsh-chat-content-width);
+  margin: 0 auto 16px;
+}
+
+.message-row:last-child {
+  margin-bottom: 0;
 }
 
 .user-row {
@@ -112,199 +551,309 @@ textarea {
 
 .message-role {
   font-size: 12px;
-  color: var(--muted);
+  line-height: 18px;
+  color: var(--dsw-alias-label-caption);
 }
 
+/* ---------------------------------------------------------------------------
+ * 气泡
+ * --------------------------------------------------------------------------
+ * 这里有两个方向要分开说：
+ *
+ * 助手侧：上游**不用气泡**。模型输出就是一段无边框正文，直接铺在 748px
+ *   正文列上（16px/28px）。原来那种白底描边圆角气泡会让模型回答显得
+ *   「像一条评论」，去掉之后阅读体验更接近 DSH。
+ *
+ * 用户侧：上游是浅蓝圆角块（--dsw-specific-bubble = deepseek-50），
+ *   r22、左右 16px / 上下 10px 内边距、16px/24px 行高，右对齐且最宽
+ *   525px 或父级 82%。原来那种深色气泡换成浅蓝色，是观感差别最大的
+ *   另一处（和主按钮由蓝转黑并列）。
+ * ------------------------------------------------------------------------- */
 .bubble {
-  max-width: 78%;
-  padding: 14px 16px;
-  border: 1px solid var(--line);
-  border-radius: 18px 18px 18px 8px;
-  background: #fff;
-  line-height: 1.7;
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--dsw-alias-label-primary);
+  font-size: 16px;
+  line-height: 28px;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;    /* 长 URL / 无空格长串不撑破列 */
 }
 
 .user-bubble {
-  border-color: transparent;
-  border-radius: 18px 18px 8px 18px;
-  background: var(--user);
-  color: var(--user-text);
+  max-width: min(525px, 82%);
+  padding: 10px 16px;
+  border-radius: 22px;
+  background: var(--dsw-specific-bubble);
+  line-height: 24px;
 }
 
-.composer {
-  position: relative;
-  margin-top: 23px;
-  padding: 18px;
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  background: #fff;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.composer:focus-within {
-  border-color: rgba(37, 99, 235, 0.55);
-  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.1);
-}
-
-.composer textarea {
-  width: 100%;
-  min-height: 135px;
-  resize: none;
-  padding: 2px 151px 55px 2px;
-  border: 0;
-  outline: none;
-  background: transparent;
-  line-height: 1.7;
-}
-
-.primary-button {
-  position: absolute;
-  right: 18px;
-  bottom: 18px;
-  min-width: 114px;
-  padding: 13px 23px;
-  border: 0;
-  border-radius: 12px;
-  background: var(--primary);
-  color: #fff;
-  cursor: pointer;
-  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.22);
-  transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
-}
-
-.primary-button:hover:not(:disabled) {
-  background: #1d4ed8;
-  box-shadow: 0 10px 22px rgba(37, 99, 235, 0.28);
-  transform: translateY(-1px);
-}
-
-.primary-button:disabled {
-  cursor: not-allowed;
-  background: #cbd5e1;
-  box-shadow: none;
-  color: #64748b;
-  opacity: 1;
-}
-
-@media (max-width: 720px) {
-  .page {
-    padding: 16px;
-  }
-
-  .card {
-    padding: 21px;
-  }
-
-  .header {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .bubble {
-    max-width: 90%;
-  }
-}
-
-/*  系统提示词部分   */
-
-.system-panel {
-  margin-top: 20px;
-  padding: 18px;
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  background: var(--primary-soft);
-}
-
-.system-panel-title {
-  display: flex;                    /* 让标题文字和「恢复默认」按钮横向并排 */
-  align-items: center;              /* 两者垂直居中对齐 */
-  justify-content: space-between;   /* 两端对齐：文字靠左，按钮靠右 */
-  gap: 12px;
-  margin-bottom: 10px;
-  font-size: 14px;
-  color: var(--muted);
-}
-
-/* 面板内的「恢复默认」小按钮
-   没有复用 .secondary-button，是因为那个尺寸偏大（padding: 13px 18px），
-   放在面板标题栏里会把整行撑高，视觉上抢了标题的主次。 */
-.link-button {
-  padding: 4px 10px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: #fff;
-  color: var(--primary);
-  font-size: 12px;
-  cursor: pointer;
-  white-space: nowrap;              /* 禁止「恢复默认」四个字被挤成两行 */
-  transition: background 0.2s ease, border-color 0.2s ease;
-}
-
-.link-button:hover:not(:disabled) {
-  background: var(--primary-soft);
-  border-color: rgba(37, 99, 235, 0.45);
-}
-
-/* disabled 状态由 JSX 里的 disabled={...} 控制，这里只负责“变灰”的视觉反馈 */
-.link-button:disabled {
-  cursor: not-allowed;
-  color: var(--muted);
-  opacity: 0.6;
-}
-
-.system-panel textarea {
-  width: 100%;
-  min-height: 120px;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: #fff;
-  color: var(--text);
-  line-height: 1.7;
-  resize: vertical;
-  outline: none;
-}
-
-.system-panel-hint {
-  margin-top: 8px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-/* ===== 工具模式开关 ===== */
-.tool-toggle {
+/* ---------------------------------------------------------------------------
+ * 「正在思考」扫光
+ * --------------------------------------------------------------------------
+ * 抄自上游 ChatView 的 .turnStatus：文字在「业务蓝 → 淡蓝 → 业务蓝」的
+ * 渐变上用 background-clip: text 抠出字，再平移渐变产生流动感。
+ * 这比一个静态「正在思考...」气泡更接近 DSH 的等待观感。
+ * ------------------------------------------------------------------------- */
+.loading-bubble {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--text);
-  cursor: pointer;
-  user-select: none;
+  height: 26px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
   white-space: nowrap;
+  background: linear-gradient(
+    90deg,
+    var(--dsw-static-deepseek-500) 0%,
+    var(--dsw-static-deepseek-500) 40%,
+    var(--dsw-static-deepseek-200) 50%,
+    var(--dsw-static-deepseek-500) 60%,
+    var(--dsw-static-deepseek-500) 100%
+  );
+  background-position: 100% 0;
+  background-size: 250% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: chat-turn-shimmer 1.8s linear infinite;
 }
-.tool-toggle input {
-  accent-color: var(--primary, #2563eb);
-  cursor: pointer;
+
+@keyframes chat-turn-shimmer {
+  to {
+    background-position: 0 0;
+  }
+}
+
+/* 尊重系统的「减少动态效果」设置：关掉动画并把文字颜色还回来，
+   否则透明字色配上静止渐变会变成一块糊住的色条。 */
+@media (prefers-reduced-motion: reduce) {
+  .loading-bubble {
+    background: none;
+    background-position: 0 0;
+    background-size: 100% 100%;
+    color: var(--dsw-alias-label-tertiary);
+    -webkit-text-fill-color: var(--dsw-alias-label-tertiary);
+    animation: none;
+  }
 }
 
 /* ===== 工具执行步骤气泡 ===== */
-.tool-step summary {
-  cursor: pointer;
-  color: var(--muted);
-  font-size: 12px;
-  font-family: monospace;
+
+/* ---------------------------------------------------------------------------
+ * 工具执行步骤
+ * --------------------------------------------------------------------------
+ * 上游的工具行是「16px 图标 + 6px 间隙 + 14px 标题 + 分隔点 + 摘要」的
+ * 单行结构（DisclosureRow / ToolRow），收起时只占 24px —— 工具调用在
+ * DSH 里是**一条很轻的行**，不是一个大块。
+ * 这里沿用 <details>/<summary> 原生结构（不重造展开逻辑），
+ * 只把 summary 那行的字体、行高、颜色对齐过去。
+ * ------------------------------------------------------------------------- */
+.tool-step {
+  width: 100%;
 }
+
+.tool-step summary {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 14px;
+  line-height: 24px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+/* 去掉 Chrome/Safari 默认的三角，换成上游那种细描边小箭头 */
+.tool-step summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-step summary::after {
+  width: 6px;
+  height: 6px;
+  margin-left: 8px;
+  border-right: 1.5px solid currentcolor;
+  border-bottom: 1.5px solid currentcolor;
+  content: '';
+  opacity: 0.8;
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+
+.tool-step[open] summary::after {
+  transform: rotate(45deg);
+}
+
+.tool-step summary:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.tool-step summary:focus-visible {
+  outline: 1.5px solid var(--dsw-alias-button-info-fill);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* 执行结果用上游的代码块底色 + 等宽字体（--ds-font-family-code 来自
+   theme/base.css；它刻意不带裸 monospace 尾巴，否则 Windows 下的中文
+   会掉进 SimSun）。 */
 .tool-step pre {
   margin: 6px 0 2px;
   max-height: 240px;
   overflow: auto;
-  padding: 8px;
-  background: #f6f8fa;
-  border: 1px solid var(--line, #e5e7eb);
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 8px;
+  background: var(--dsw-alias-markdown-code-block);
+  color: var(--dsw-alias-label-secondary);
+  font-family: var(--ds-font-family-code);
   font-size: 12px;
-  line-height: 1.5;
+  line-height: 18px;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+/* ---------------------------------------------------------------------------
+ * 输入卡片
+ * --------------------------------------------------------------------------
+ * 上游 InputBar 的浮动胶囊：r22、l2-darkmode-thin 描边、--dsw-specific-input-major
+ * 底色、lv2 阴影，宽 780px（= 正文 748 + 左右各 16）。
+ * 结构也照搬：textarea 在上，操作行在下（间距 12px），主按钮落在右下角。
+ * 原来那个「发送按钮绝对定位 + textarea 用 151px 右内边距躲开它」的写法
+ * 一并不用了 —— 那种写法要手工维护避让距离，改字号就会错位。
+ * ------------------------------------------------------------------------- */
+.composer {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: var(--dsh-composer-card-max-width);
+  margin: 0 auto 8px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
+  border-radius: 22px;
+  background: var(--dsw-specific-input-major);
+  box-shadow: var(--dsw-shadow-lv2);
+  transition: border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+/* 聚焦描边用业务蓝，**不要**用 --dsw-alias-brand-primary。
+   坑在这里：brand-primary 在浅色下指向 neutral-bluish-1000，也就是近黑色
+   rgb(15,17,21)，上游拿它当输入框的聚焦色。一旦用它，点一下模型 chip、
+   菜单一展开，整张输入卡片的外框就会从浅灰 rgba(0,0,0,0.1) 跳成黑 ——
+   也就是「选模型的时候外框变黑」那个现象。
+   下面是两条一起用：
+     :focus-within  —— 光标在输入框里时变蓝
+     .is-menu-open  —— 菜单展开期间保持蓝（这个类由 JSX 挂）
+   只靠 :focus-within 不稳：点击按钮后浏览器是否把焦点移进按钮并不一致
+   （Safari 就不会把焦点给按钮），而菜单里的选项按钮一旦被点掉就从 DOM
+   移除，焦点会掉回 body，外框又闪回灰色。挂个显式状态最可靠。 */
+.composer:focus-within,
+.composer.is-menu-open {
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+.composer textarea {
+  width: 100%;
+  min-height: 72px;
+  max-height: 220px;
+  padding: 2px 4px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 16px;
+  line-height: 24px;
+  resize: none;
+}
+
+.composer textarea::placeholder {
+  color: var(--dsw-alias-label-dimmed);
+}
+
+/* 操作行：模型 chip 和发送按钮同属右侧簇，chip 在前、按钮在后 ——
+   上游 InputBar.module.css 的注释原话是 "model + send on the right"，
+   也就是你在界面上看到的「模型名在发送按钮左边」。 */
+.composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-height: 36px;
+}
+
+/* ---------------------------------------------------------------------------
+ * 主按钮
+ * --------------------------------------------------------------------------
+ * 上游 Button md：36px 高、r18、左右 14px 内边距、14px/22px 字号。
+ * 底色 --dsw-alias-button-primary-fill，浅色下是近黑色（不是蓝色）；
+ * 悬停 --dsw-alias-button-primary-hover 变浅灰；
+ * 禁用只降透明度，**不改底色** —— 上游就是一条 opacity: 0.4。
+ * ------------------------------------------------------------------------- */
+.primary-button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 36px;
+  min-width: 0;
+  padding: 0 14px;
+  border: none;
+  border-radius: 18px;
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+  font-size: 14px;
+  line-height: 22px;
+  cursor: pointer;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+.primary-button:hover:not(:disabled) {
+  background: var(--dsw-alias-button-primary-hover);
+}
+
+.primary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* ---------------------------------------------------------------------------
+ * 窄屏（手机）
+ * --------------------------------------------------------------------------
+ * 顶栏换成两行：第一行标题，第二行控件。
+ * 模型选择已经不在顶栏了（挪到输入卡片的 chip 上），所以这里只管 chip 的宽度
+ * ——窄屏下操作行还要放发送按钮，chip 太长会把按钮挤出去。
+ * ------------------------------------------------------------------------- */
+@media (max-width: 720px) {
+  .header {
+    gap: 6px;
+  }
+
+  .header h1 {
+    width: 100%;
+    margin-right: 0;
+  }
+
+  .model-chip {
+    max-width: 150px;
+  }
+
+  .bubble {
+    font-size: 15px;
+    line-height: 26px;
+  }
+
+  .user-bubble {
+    max-width: 90%;
+  }
+
+  .chat-box {
+    padding: 12px calc(var(--dsh-composer-side-clearance) + 8px);
+  }
 }

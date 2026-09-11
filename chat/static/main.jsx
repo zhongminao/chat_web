@@ -1,4 +1,4 @@
-const { useState, useEffect } = React;
+const { useState, useEffect, useRef } = React;
 /* 从对象里把几个属性拎出来变成独立变量 等价于
   const useState = React.useState;
   const useEffect = React.useEffect; 
@@ -19,6 +19,13 @@ const { useState, useEffect } = React;
 function createId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
+
+/* 温度可选的档位。0 最稳定（同样的问题每次答案基本一样），越大越发散。
+   注意：这只决定「请求里带什么值」，并不保证每个模型都听 —— 推理类模型
+   （gpt-5.x / 6.x 那一挂）经常忽略这个参数，那是网关侧的行为，前端看不出来。
+   上限取 1：OpenAI 系模型的 temperature 合法区间是 0~2，但推理模型往往只认
+   默认值，取到 1 已经够用，不至于踩到被拒的区间。 */
+const TEMPERATURE_CHOICES = [0, 0.2, 0.5, 0.7, 1];
 
 
 
@@ -55,6 +62,25 @@ function App() {
   const [toolsEnabled, setToolsEnabled] = useState(false);
   const [toolSystemPrompt, setToolSystemPrompt] = useState("");
   const [baseSnapshot, setBaseSnapshot] = useState("");
+  /* ---- 模型 chip + 弹出菜单（新增）----
+     temperature：null 表示「没手动设过」，这时请求不带这个值，后端会用它在该
+       模型上声明的默认温度（providers.yaml 里的 temperature）。
+       用户一旦在菜单里选了档位，就变成具体数字并一直带着走。 */
+  const [temperature, setTemperature] = useState(null);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [menuPane, setMenuPane] = useState("root");   // root=一级菜单 | model=模型列表 | temp=温度列表
+  /* useRef：拿一个「不触发重新渲染」的引用。这里要它来指菜单的 DOM 节点，
+     好判断点击是不是发生在菜单外面（点外面要关掉菜单）。
+     用 useState 存 DOM 节点也行，但每次赋值都会多渲染一次，纯属浪费。 */
+  const modelMenuRef = useRef(null);
+  /* chip 自己的 DOM 引用。用途：菜单里的某个选项被点掉之后，那个按钮就从 DOM
+     里消失了，浏览器的焦点会掉回 <body> —— 表现就是外框的蓝色「啪」一下掉回
+     灰色。选完要把焦点接回输入框内部，外框才能一直保持蓝色。
+     接回的目标是**正文输入框**而不是 chip 自己：选完模型的下一步就是打字，
+     焦点头在输入框里省一次点击。（DSH 那种把焦点还给触发按钮的做法更适合
+     普通表单，对聊天框不合适。） */
+  const modelChipRef = useRef(null);
+  const composerInputRef = useRef(null);
   useEffect(() => {
     fetch("/api/providers")
       .then((response) => response.json())
@@ -80,18 +106,86 @@ function App() {
         吃饭(烤肉, [])，吃饭 函数看到第二个参数是空数组，就决定“只给你上一盘烤肉，后面不再加了”
       
   */}
+  /* ---- 弹出菜单的关闭行为（新增）----
+     原生 <select> 这两件事是白送的，换成自绘按钮就得自己写，这是这次改动的主要代价。
+       点菜单外面 → 关掉并退回到一级菜单
+       按 Esc     → 在二级菜单里先退回一级，已经在一级了才真的关掉
+     （手机上没有 Esc 键，所以菜单里另外还放了一个「返回」按钮，见下面的 JSX。）
+     事件挂在 document 上而不是菜单自己身上：点击可能落在页面任何地方，
+     只有挂在 document 才能知道「点到的是外面」。 */
+  useEffect(() => {
+    if (!isMenuOpen) {
+      return undefined;                  // 菜单没开就不用监听，顺手省掉两个监听器
+    }
+
+    function handlePointerDown(event) {
+      if (modelMenuRef.current && !modelMenuRef.current.contains(event.target)) {
+        setIsMenuOpen(false);
+        setMenuPane("root");
+      }
+    }
+
+    function handleKeyDown(event) {
+      if (event.key !== "Escape") {
+        return;
+      }
+      if (menuPane === "root") {
+        setIsMenuOpen(false);
+      } else {
+        setMenuPane("root");
+      }
+    }
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    /* 清理函数：effect 重新执行或组件卸载前，把监听器摘掉。
+       不摘的话每开关一次菜单就多挂一层，久了会重复触发。 */
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isMenuOpen, menuPane]);
+
   const canSend = input.trim() && !isLoading;
 
-  function currentProviderModels() {
+  /* 当前选中的模型对象：从 providers 目录里按 provider + id 查出来。
+     原来这里是 currentProviderModels()（给第二个 <select> 填选项用），
+     换成 chip + 菜单之后不再需要那个函数了。 */
+  function currentModel() {
     const entry = providers.find((item) => item.provider === provider);
-    return entry?.models || [];
+    return (entry?.models || []).find((model) => model.id === modelName) || null;
   }
 
-  function handleProviderChange(event) {
-    const next = event.target.value;
-    setProvider(next);
-    const entry = providers.find((item) => item.provider === next);
-    setModelName(entry?.models?.[0]?.id || "");
+  /* 显示用温度 vs 实际发送的温度，这两个是分开的：
+       shownTemperature —— chip 和菜单上给人看的，没手动设过就显示该模型的默认值
+       temperature      —— 真正塞进请求体的，null 就让后端按模型默认值处理
+     分开的好处：切换模型时显示的默认温度会自动跟着新模型走，
+     而不是把上一个模型上设的温度悄悄带过去。 */
+  const modelDefaultTemperature = currentModel()?.temperature ?? 0.2;
+  const shownTemperature = temperature ?? modelDefaultTemperature;
+
+  /* 选中一个模型 = 同时选定它的供应商（菜单是按供应商分区的，见下面的 JSX）。
+     所以这里要一起写 provider 和 modelName 两个状态。 */
+  /* 选完之后把焦点送回正文输入框：
+     1) 焦点不出输入卡片，外框的蓝色不会掉回灰色（见 styles.css 里 .composer）；
+     2) 下一步就能直接打字，不用再点一次。 */
+  function focusComposer() {
+    composerInputRef.current?.focus();
+  }
+
+  function selectModel(nextProvider, nextModelId) {
+    setProvider(nextProvider);
+    setModelName(nextModelId);
+    setIsMenuOpen(false);
+    setMenuPane("root");
+    focusComposer();
+  }
+
+  function selectTemperature(next) {
+    setTemperature(next);
+    setIsMenuOpen(false);
+    setMenuPane("root");
+    focusComposer();
   }
 
   async function sendMessage(rawText) {
@@ -130,6 +224,10 @@ function App() {
           model_name: modelName,
           system_prompt: systemPrompt,      // ← 新增
           tools_enabled: toolsEnabled,      // ← 新增：是否附带工具并允许模型调用
+          // 新增：采样温度。state 是 null 时这里会发 null，后端 ChatRequest 的
+          // temperature 正好是 float | None，收到 None 就回落去读 providers.yaml
+          // 里该模型声明的默认温度 —— 所以「没手动设过」不需要前端自己算默认值。
+          temperature: temperature,
         }),
       });
 
@@ -215,32 +313,9 @@ function App() {
       <section className="card">
         <header className="header">
           <h1>AI 聊天助手</h1>
-          <div className="model-selector">
-            <select
-              value={provider}
-              onChange={handleProviderChange}
-              disabled={isLoading}
-              title="选择供应商"
-            >
-              {providers.map((item) => (
-                <option key={item.provider} value={item.provider}>
-                  {item.display_name || item.provider}
-                </option>
-              ))}
-            </select>
-            <select
-              value={modelName}
-              onChange={(event) => setModelName(event.target.value)}
-              disabled={isLoading}
-              title="选择模型"
-            >
-              {currentProviderModels().map((model) => (
-                <option key={model.id} value={model.id}>
-                  {model.name || model.id}
-                </option>
-              ))}
-            </select>
-          </div>
+          {/* 原来这里有两个 <select>（供应商 + 模型）。现在合并成输入框下方
+              发送按钮左边的一个 chip，点开是「模型 / 温度」二级菜单 —— 见
+              <form className="composer"> 里的 .model-menu。 */}
           <button
             type="button"
             className="secondary-button"
@@ -374,7 +449,10 @@ function App() {
           {isLoading ? (
             <div className="message-row">
               <div className="message-role">助手</div>
-              <div className="bubble">正在思考...</div>
+              {/* 新增的 loading-bubble 类：等待态在 DSH 那边是一行「扫光文字」
+                  （ChatView 的 turnStatus），不是一块静态气泡。文字内容没变，
+                  只是多挂一个类名，样式写在 styles.css 里。 */}
+              <div className="bubble loading-bubble">正在思考...</div>
             </div>
           ) : null}
           {/* 条件渲染 {条件 ? 要显示的 : null}
@@ -384,8 +462,15 @@ function App() {
 
         </section>
 
-        <form className="composer" onSubmit={handleSubmit}>
+        {/* 菜单展开时给表单多挂一个 is-menu-open 类，让输入卡片的外框在整个
+            选模型的过程中保持蓝色不变 —— 详见 styles.css 里 .composer 那段。
+            只靠 CSS 的 :focus-within 判断不稳，所以把状态显式写在类名上。 */}
+        <form
+          className={isMenuOpen ? "composer is-menu-open" : "composer"}
+          onSubmit={handleSubmit}
+        >
           <textarea
+            ref={composerInputRef}
             value={input}
             onChange={(event) => setInput(event.target.value)}
             onKeyDown={handleKeyDown}
@@ -406,9 +491,175 @@ function App() {
                   }
                 }
           */}
-          <button type="submit" className="primary-button" disabled={!canSend}>
-            {isLoading ? "发送中..." : "发送"}
-          </button>
+          {/* 新增的 .composer-actions 包裹层：DSH 的输入卡片是「上面 textarea，
+              下面一排操作按钮」，主按钮落在这一排的右下角。
+              原来发送按钮是靠 position:absolute 贴在卡片右下角的，textarea 再用
+              padding-right:151px 手工躲开它 —— 那种写法改一下字号或按钮文案就会
+              错位，所以换成正常的上下两行布局。 */}
+          <div className="composer-actions">
+            {/* ---- 模型 chip + 二级弹出菜单（新增）----
+                位置对齐 DSH：和发送按钮同属操作行的右侧簇，chip 在前、按钮在后
+                （上游 InputBar.module.css 的注释：model + send on the right）。
+
+                ref={modelMenuRef} 挂在最外层这个 div 上，而不是只挂菜单本身：
+                chip 和菜单必须算作「同一块内部区域」，否则点 chip 会被上面那个
+                document 上的 mousedown 监听当成「点到了外面」，菜单刚开就被关掉。 */}
+            <div className="model-menu" ref={modelMenuRef}>
+              <button
+                type="button"
+                className="model-chip"
+                ref={modelChipRef}
+                onClick={() => {
+                  setIsMenuOpen((open) => !open);
+                  setMenuPane("root");          // 每次重新打开都从一级菜单开始
+                }}
+                disabled={isLoading}
+                aria-haspopup="menu"
+                aria-expanded={isMenuOpen}
+                title="选择模型与温度"
+              >
+                <span className="model-chip-name">
+                  {currentModel()?.name || modelName || "选择模型"}
+                </span>
+                {/* 温度用更浅的第三级文字色跟在名字后面 —— 对应上游 chip 上
+                    那个跟在模型名后面的 effort 值（triggerEffort）。 */}
+                <span className="model-chip-temp">{shownTemperature}</span>
+                <span className="model-chip-chevron" aria-hidden="true" />
+              </button>
+
+              {isMenuOpen ? (
+                /* 菜单向上弹：它在输入卡片的底部，往下弹会跑出屏幕。
+                   这个 bottom: 100% 的写法照抄上游 ModelSelect.module.css 第 67 行。 */
+                <div className="model-popup" role="menu">
+                  {menuPane === "root" ? (
+                    /* 一级菜单：两格，各自右边显示当前值 + 一个「›」表示还能往里点。
+                       规格照抄上游 Menu_cell（ModelSelect.module.css 的 .cell）：
+                       40px 行高、10px 左右内边距、10px 圆角。 */
+                    <div className="model-pane">
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="model-cell"
+                        onClick={() => setMenuPane("model")}
+                      >
+                        <span className="model-cell-label">模型</span>
+                        <span className="model-cell-value">
+                          {currentModel()?.name || modelName}
+                        </span>
+                        <span className="model-cell-chevron" aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        className="model-cell"
+                        onClick={() => setMenuPane("temp")}
+                      >
+                        <span className="model-cell-label">温度</span>
+                        <span className="model-cell-value">{shownTemperature}</span>
+                        <span className="model-cell-chevron" aria-hidden="true" />
+                      </button>
+                    </div>
+                  ) : null}
+
+                  {menuPane === "model" ? (
+                    /* 二级菜单 · 模型：按供应商分区。providers 这个数组本来就是
+                       [{provider, display_name, models: [...]}, ...] 的形状，
+                       和这里要的两层结构一模一样，所以不用改后端一个字。 */
+                    <div className="model-pane">
+                      {/* 返回上一级。手机上没有 Esc 键，少了这个按钮就出不去。 */}
+                      <button
+                        type="button"
+                        className="model-back"
+                        onClick={() => setMenuPane("root")}
+                      >
+                        <span className="model-back-arrow" aria-hidden="true" />
+                        返回
+                      </button>
+                      {providers.map((item) => (
+                        <section key={item.provider} className="model-group">
+                          {/* 分区标题：供应商显示名，滚动时粘在顶部 */}
+                          <div className="model-group-title">
+                            {item.display_name || item.provider}
+                          </div>
+                          {(item.models || []).map((model) => {
+                            const selected =
+                              item.provider === provider && model.id === modelName;
+                            return (
+                              <button
+                                key={model.id}
+                                type="button"
+                                role="menuitemradio"
+                                aria-checked={selected}
+                                className={
+                                  selected ? "model-option is-selected" : "model-option"
+                                }
+                                onClick={() => selectModel(item.provider, model.id)}
+                              >
+                                <span className="model-option-name">
+                                  {model.name || model.id}
+                                </span>
+                                {/* 选中标记是右侧的对勾，不是给整行填色 —— 上游就是这个做法 */}
+                                {selected ? (
+                                  <span className="model-option-check" aria-hidden="true">
+                                    ✓
+                                  </span>
+                                ) : null}
+                              </button>
+                            );
+                          })}
+                        </section>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {menuPane === "temp" ? (
+                    /* 二级菜单 · 温度 */
+                    <div className="model-pane">
+                      <button
+                        type="button"
+                        className="model-back"
+                        onClick={() => setMenuPane("root")}
+                      >
+                        <span className="model-back-arrow" aria-hidden="true" />
+                        返回
+                      </button>
+                      <div className="model-group-title">温度</div>
+                      {TEMPERATURE_CHOICES.map((value) => {
+                        const selected = value === shownTemperature;
+                        return (
+                          <button
+                            key={value}
+                            type="button"
+                            role="menuitemradio"
+                            aria-checked={selected}
+                            className={
+                              selected ? "model-option is-selected" : "model-option"
+                            }
+                            onClick={() => selectTemperature(value)}
+                          >
+                            <span className="model-option-name">
+                              {value}
+                              {/* 标出该模型的默认值，换模型时好对照 */}
+                              {value === modelDefaultTemperature ? "（默认）" : ""}
+                            </span>
+                            {selected ? (
+                              <span className="model-option-check" aria-hidden="true">
+                                ✓
+                              </span>
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+
+            <button type="submit" className="primary-button" disabled={!canSend}>
+              {isLoading ? "发送中..." : "发送"}
+            </button>
+          </div>
         </form>
       </section>
     </main>

@@ -1,9 +1,0 @@
-Metadata-Version: 2.4
-Name: chat
-Version: 0.1.0
-Summary: AI 聊天助手：React + FastAPI，后端通过 llm-client 调用 LLM
-Requires-Python: >=3.10
-Requires-Dist: fastapi
-Requires-Dist: uvicorn
-Requires-Dist: pydantic
-Requires-Dist: llm-client

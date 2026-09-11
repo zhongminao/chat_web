@@ -66,6 +66,38 @@ class ChatResponse(BaseModel):
 app = FastAPI(title="chat-app")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+# 鉴权**不在这个进程里**做。
+#
+# 公网入口的密码由 cpolar 边缘负责（/usr/local/etc/cpolar/cpolar.yml 里的 auth 项），
+# 局域网直连 8200 则完全不需要密码 —— 这正是想要的效果：公网要密码，局域网不要。
+#
+# 为什么不能在这里做：应用层分不清「公网来的」和「局域网来的」。cpolar 客户端
+# 跑在本机、连的是 localhost:8200，局域网设备也连同一个端口，两者在应用眼里长得
+# 一样；靠来源 IP 判断会被 X-Forwarded-For 缺失（退化成 127.0.0.1，看起来正好像
+# 局域网）绕过，靠 Host 头判断则可以直接伪造。只有放在 cpolar 边缘才是结构性的：
+# 公网请求必过它，局域网请求根本不经过它。
+#
+# 2026-09-11 这里曾挂过一个 BasicAuthMiddleware（chat/basic_auth.py，66 行），
+# 现已删除 —— 它的活由 cpolar 接管了，留着就是挂着不执行的死代码。
+# 真需要应用层密码时（比如换隧道方式、或要直接暴露端口），见 git 历史取回。
+
+
+def tools_allowed() -> bool:
+    """服务端是否允许工具模式。
+
+    这是**服务端**的开关，和前端那个勾选框是两码事：tools_enabled 是请求体里
+    的字段，客户端想传 true 就传 true。所以只要这个进程能被别人访问，就必须在
+    这里掐一道，不能信任客户端。
+
+    为什么重要：开了工具模式，模型就能调用 run_bash，而 run_bash 是
+    subprocess.run(shell=True) —— 等于把 shell 交出去。暴露到公网时把
+    CHAT_ALLOW_TOOLS 设成 false，这一条路就直接断掉，最坏情况退化成
+    「别人蹭你的 API 额度」，而不是「你的机器被人控制」。
+
+    默认 true（保持本地使用的手感不变），只在 env 里显式关掉才生效。
+    """
+    return os.getenv("CHAT_ALLOW_TOOLS", "true").strip().lower() not in ("0", "false", "no", "off")
+
 
 def load_env_value_from_bashrc(
     key_name: str,
@@ -183,12 +215,14 @@ def request_real_reply(
         model_name=payload.model_name,
         temperature=temperature,
     )
+    # 工具开关在服务端再判一次：客户端传什么都以这里的结论为准。
+    tools_enabled = payload.tools_enabled and tools_allowed()
     normalized_messages = normalize_messages(
         payload.messages,
         payload.system_prompt,
-        tools_enabled=payload.tools_enabled,
+        tools_enabled=tools_enabled,
     )
-    if payload.tools_enabled:
+    if tools_enabled:
         # agent 模式：多轮工具调用，直到模型直接回答；返回 (最终文本, 工具流水账)
         return run_agent_turn(client, normalized_messages)
 

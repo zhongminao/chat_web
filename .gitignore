@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.venv/
+venv/
+build/
+dist/
+
+# 编辑器
+.vscode/
+.idea/
+
+# 日志与临时文件
+*.log
+*.tmp
+
+# UI 改造前的本地备份：留在磁盘上备查，但不进版本库
+# （git 已经有历史了，这类目录进仓库只会让 diff 变脏）
+static-backup-*/

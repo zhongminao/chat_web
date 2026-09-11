@@ -1,0 +1,102 @@
+/* ============================================================================
+ * DSH 设计 token 入口表
+ * ----------------------------------------------------------------------------
+ * 来源：deepseek-harness / packages/client/ui-theme/src/styles/
+ *   base.css                  字体栈 + 动效曲线（--ds-ease-in-out 等）
+ *   design-platform.css       颜色双层 token：--dsw-static-*（色阶）
+ *                             → --dsw-alias-* / --dsw-specific-*（语义别名）
+ *   scrollbar.css             滚动条皮肤，是 --dsw-alias-scrollbar-* 的唯一消费方
+ *   gradient-shadow-text.css  阴影（--dsw-shadow-lv1/2/3）+ 字号字重 token
+ *
+ * 授权：上游 DeepSeek Harness 是 MIT 协议（Copyright (c) 2026 DeepSeek）。
+ * MIT 允许任意使用、修改、再分发，唯一的条件是「所有拷贝都必须附带版权声明和
+ * 许可声明」。上游那 4 个文件自身头部并没有带授权字样，所以拷贝过来之后，
+ * 许可正文另外附在同目录的 theme/LICENSE 里 —— 那个文件不要删。
+ * （这段是 2026-09-11 补的：一开始只写了来源、漏了许可声明。）
+ *
+ * 这四张表是**逐字拷贝**的，一个字都没改：想升级就整份覆盖，
+ * 不要在这里手改颜色 —— 一旦改了，以后就没法跟上游对齐了。
+ * 上游还有第五张 shiki.css（代码高亮配色），这边不做 markdown 渲染，
+ * 所以没有引入。
+ *
+ * 关于暗色：design-platform.css / gradient-shadow-text.css 里确实带了
+ * `body[data-ds-dark-theme]` 那套暗色覆盖，但它们**永远不会生效** ——
+ * 这个项目只做浅色，页面不会去写这个属性。留着不动是为了保持逐字拷贝、
+ * 方便以后跟上游同步，不是遗漏，别去删它。
+ *
+ * 顺序是有约束的，别调换：scrollbar.css 读 design-platform.css 里声明的
+ * token，必须排在它后面。这条规则来自上游
+ * packages/client/web/src/base.css（web 壳的入口表），下面这段和它等价。
+ *
+ * 顺带一个容易踩的坑：design-platform.css 把 --dsw-alias-* 声明在 `body`
+ * 上，自定义属性只向下继承，所以任何读这些 token 的规则也必须挂在 `body`
+ * 或其子孙上，写在 `html` 上会解析成无效值。
+ * ========================================================================== */
+
+@import './theme/base.css';
+@import './theme/design-platform.css';
+@import './theme/scrollbar.css';
+@import './theme/gradient-shadow-text.css';
+
+/* ---------------------------------------------------------------------------
+ * 外壳全局基础：等价于上游 packages/client/web/src/base.css 的第 11-36 行，
+ * 多了两处本地适配（都用注释标出来了）。
+ * ------------------------------------------------------------------------- */
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+/* 本地适配：本项目只做浅色。上游是由 ui-layout 的 ThemePresenter 在运行时
+   写 document.documentElement.style.colorScheme（见 boot-theme.ts），
+   这里没有主题系统，所以直接钉死在 CSS 里。
+   这行不能省：系统处于深色模式时，浏览器会把下拉列表、勾选框、滚动条
+   这些**原生控件**按深色画出来，跟浅色页面拼在一起非常突兀。 */
+:root {
+  color-scheme: light;
+}
+
+/* 本地适配：这位聊天服务在局域网上也会被手机访问，移动端浏览器地址栏
+   收放时 100% 会跟着抖；dvh（动态视口高度）跟着实际可视区走。
+   不支持 dvh 的老引擎会忽略这条，退回上面的 100%。 */
+@supports (height: 100dvh) {
+  #root {
+    height: 100dvh;
+  }
+}
+
+body {
+  font-family: var(--dsw-font-family);
+  /* 灰度抗锯齿优先于次像素渲染（跟 DSH 一致）：WebKit/Blink 与 Firefox 的
+     macOS 等价写法，其它引擎会忽略这两行。 */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--dsw-alias-label-primary);
+  background: var(--dsw-alias-bg-base);
+}
+
+/* 表单控件不吃 body 的字体（UA 样式表给它们钉死了 family：Chrome 的 button
+   回落到 Arial、textarea 回落到 monospace），所以显式再设一次。 */
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+
+/* ---------------------------------------------------------------------------
+ * 聊天列宽度轴
+ * --------------------------------------------------------------------------
+ * 数值照抄上游 ui-conversation/src/client/skeleton/ConversationRoot.module.css：
+ * 正文列 748px，输入卡片是「正文 + 32px」= 780px，两侧各留 16px 间隙。
+ * 这条关系在窄视口下也成立 —— 所以用 calc 表达而非写死 780px：
+ * 输入卡永远比正文宽 32px，视觉上「垫」在正文下面。
+ * ------------------------------------------------------------------------- */
+#root {
+  --dsh-chat-content-width: 748px;
+  --dsh-composer-card-max-width: calc(var(--dsh-chat-content-width) + 32px);
+  --dsh-composer-side-clearance: 16px;
+}

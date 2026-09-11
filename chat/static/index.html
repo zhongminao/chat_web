@@ -5,6 +5,16 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AI 聊天助手</title>
+  <!--
+    两张样式表，顺序不能换：
+      1) theme.css  设计 token（--dsw-* 那些变量）。整份拷自 DSH 的
+                    packages/client/ui-theme/src/styles/，一行没改。
+      2) styles.css 本项目的界面样式。里面几乎不写具体颜色，
+                    一律引用上面那张表里的变量名。
+    调换顺序的话，styles.css 读到的变量会解析不出来，页面会退化成
+    「有布局、没颜色」的样子。
+  -->
+  <link rel="stylesheet" href="/static/theme.css" />
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
