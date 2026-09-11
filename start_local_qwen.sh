@@ -12,6 +12,12 @@
 # 对话模板说明：模型目录里自带 chat_template.jinja（Qwen3.5 官方模板，
 # 已内嵌在 tokenizer_config.json），vLLM 自动加载，无需额外指定；
 # 若要自定义模板，追加 --chat-template /path/to/your_template.jinja
+#
+# 工具调用（function calling）说明：
+#   --enable-auto-tool-choice      打开工具调用支持（必须与 parser 成对）
+#   --tool-call-parser qwen3_xml   该模型模板是 Qwen XML 格式（<tool_call>），
+#                                  用 qwen3_xml 解析器把模型输出还原成 tool_calls
+#   --enable-prefix-caching        工具 schema 固定在前缀，多轮自动复用 KV 缓存
 set -euo pipefail
 
 # Blackwell (SM 12.x) 显卡上 FlashInfer 的 JIT 架构检测失败，
@@ -19,7 +25,7 @@ set -euo pipefail
 # 关闭其采样器，改用 vLLM 原生 PyTorch 采样路径。
 export VLLM_USE_FLASHINFER_SAMPLER=0
 
-MODEL_DIR="/home/zhong/mydisk/IM_Opt/LLM/qwen3p5_2b"
+MODEL_DIR="${LOCAL_QWEN_MODEL_DIR:-/home/zhong/mydisk/IM_Opt/LLM/qwen3p5_2b}"
 PORT="${1:-8001}"
 MODEL_NAME="${LOCAL_QWEN_MODEL_NAME:-local_qwen}"
 
@@ -35,4 +41,7 @@ exec vllm serve "${MODEL_DIR}" \
   --host 0.0.0.0 \
   --port "${PORT}" \
   --max-model-len 32768 \
-  --gpu-memory-utilization 0.9
+  --gpu-memory-utilization 0.9 \
+  --enable-auto-tool-choice \
+  --tool-call-parser qwen3_xml \
+  --enable-prefix-caching

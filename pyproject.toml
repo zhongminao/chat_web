@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chat"
+version = "0.1.0"
+description = "AI 聊天助手：React + FastAPI，后端通过 llm-client 调用 LLM"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "llm-client",
+]
+
+[tool.setuptools]
+packages = ["chat"]
+
+[tool.setuptools.package-data]
+chat = ["static/*"]

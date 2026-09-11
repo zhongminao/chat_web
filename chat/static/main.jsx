@@ -43,6 +43,7 @@ function App() {
     React 机制管“存在哪”和“怎么更新”（状态表）。
   */}
   const [messages, setMessages] = useState([]);
+  const [protocol, setProtocol] = useState([]);   // 协议历史：发给后端的真实消息（含 tool 回放）
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [providers, setProviders] = useState([]);
@@ -50,7 +51,10 @@ function App() {
   const [modelName, setModelName] = useState("");
   const [systemPrompt, setSystemPrompt] = useState("");
   const [defaultSystemPrompt, setDefaultSystemPrompt] = useState("");
-  const [isSystemPanelOpen, setIsSystemPanelOpen] = useState(true);
+  const [isSystemPanelOpen, setIsSystemPanelOpen] = useState(false);
+  const [toolsEnabled, setToolsEnabled] = useState(false);
+  const [toolSystemPrompt, setToolSystemPrompt] = useState("");
+  const [baseSnapshot, setBaseSnapshot] = useState("");
   useEffect(() => {
     fetch("/api/providers")
       .then((response) => response.json())
@@ -61,6 +65,8 @@ function App() {
           setDefaultSystemPrompt(data.default_system_prompt);
           setSystemPrompt(data.default_system_prompt);
         }
+        setToolSystemPrompt(data.tool_system_prompt || "");   // 工具说明文本（来自后端）
+        setBaseSnapshot(data.default_system_prompt || "");    // 非工具模式的提示词快照
         if (list.length > 0) {
           setProvider(list[0].provider);
           setModelName(list[0].models?.[0]?.id || "");
@@ -100,10 +106,12 @@ function App() {
       role: "user",
       content,
     };
+    const userProtocol = { role: "user", content };   // 协议历史里只存纯对话消息
 
     const nextMessages = [...messages, userMessage];
     {/*复制旧的全部，再加一个新东西在最后 */}
     setMessages(nextMessages);
+    setProtocol((p) => [...p, userProtocol]);
     setInput("");
     setIsLoading(true);
 
@@ -114,13 +122,14 @@ function App() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          messages: nextMessages.map((message) => ({
-            role: message.role,
-            content: message.content,
-          })),
+          // 完整协议回放：protocol 里保存了历史所有真实消息，
+          // 包括 assistant(tool_calls) + tool 结果的成对消息；
+          // 后端原样透传给模型 → 模型跨轮能看到上轮完整的工具过程。
+          messages: protocol.concat(userProtocol),
           provider,
           model_name: modelName,
           system_prompt: systemPrompt,      // ← 新增
+          tools_enabled: toolsEnabled,      // ← 新增：是否附带工具并允许模型调用
         }),
       });
 
@@ -129,13 +138,29 @@ function App() {
       }
 
       const data = await response.json();
+      // 先插工具执行步骤（可展开查看），再插最终回复
+      const newItems = [];
+      (data.steps || []).forEach((step) => {
+        newItems.push({
+          id: createId(),
+          role: "tool-step",
+          tool: step.tool,
+          result: step.result,
+          ok: step.ok,
+        });
+      });
       const assistantMessage = {
         id: createId(),
         role: "assistant",
         content: data.reply,
       };
+      newItems.push(assistantMessage);
 
-      setMessages((currentMessages) => [...currentMessages, assistantMessage]);
+      setMessages((currentMessages) => [...currentMessages, ...newItems]);
+      // 协议历史追加本次运行产生的完整协议消息（trace），下一轮原样回放
+      if (data.trace && data.trace.length) {
+        setProtocol((p) => [...p, ...data.trace]);
+      }
     } catch (error) {
       const assistantMessage = {
         id: createId(),
@@ -143,6 +168,7 @@ function App() {
         content: `请求失败：${error.message}`,
       };
 
+      // 失败轮不污染协议历史：错误气泡只进展示，不回放给模型
       setMessages((currentMessages) => [...currentMessages, assistantMessage]);
     } finally {
       setIsLoading(false);
@@ -163,6 +189,25 @@ function App() {
 
   function clearMessages() {
     setMessages([]);
+    setProtocol([]);   // 清空对话 = 清空展示 + 清空协议历史
+  }
+
+  // 工具模式开关：勾选时把"工具说明 + 当前提示词"拼进面板（看得见的拼接，不是后端黑盒），
+  // 取消时还原成勾选前的提示词。拼好的全文随请求原样发送，后端不再自动拼接。
+  function handleToolsToggle(event) {
+    const next = event.target.checked;
+    if (next) {
+      setBaseSnapshot(systemPrompt || defaultSystemPrompt);   // 记住开之前的提示词
+      setToolsEnabled(true);
+      setSystemPrompt(
+        toolSystemPrompt
+          ? toolSystemPrompt + "\n\n" + (systemPrompt || defaultSystemPrompt)
+          : systemPrompt || defaultSystemPrompt
+      );
+    } else {
+      setToolsEnabled(false);
+      setSystemPrompt(baseSnapshot);
+    }
   }
 
   return (
@@ -203,6 +248,15 @@ function App() {
           >
             {isSystemPanelOpen ? "收起系统提示词" : "系统提示词"}
           </button>
+          <label className="tool-toggle" title="勾选后模型可调用 read/write/edit/bash 工具，面板会自动拼入工具说明">
+            <input
+              type="checkbox"
+              checked={toolsEnabled}
+              onChange={handleToolsToggle}
+              disabled={isLoading}
+            />
+            工具模式
+          </label>
           <button type="button" className="secondary-button" onClick={clearMessages}>
             清空对话
           </button>
@@ -215,8 +269,21 @@ function App() {
               <button
                 type="button"
                 className="link-button"
-                onClick={() => setSystemPrompt(defaultSystemPrompt)}
-                disabled={!defaultSystemPrompt || systemPrompt === defaultSystemPrompt}
+                onClick={() => {
+                  setBaseSnapshot(defaultSystemPrompt);
+                  setSystemPrompt(
+                    toolsEnabled && toolSystemPrompt
+                      ? toolSystemPrompt + "\n\n" + defaultSystemPrompt
+                      : defaultSystemPrompt
+                  );
+                }}
+                disabled={
+                  !defaultSystemPrompt ||
+                  systemPrompt ===
+                    (toolsEnabled && toolSystemPrompt
+                      ? toolSystemPrompt + "\n\n" + defaultSystemPrompt
+                      : defaultSystemPrompt)
+                }
               >
                 恢复默认
               </button>
@@ -277,7 +344,16 @@ function App() {
                 {message.role === "user" ? "我" : "助手"}
               </div>
               <div className={message.role === "user" ? "bubble user-bubble" : "bubble"}>
-                {message.content}
+                {message.role === "tool-step" ? (
+                  <details className="tool-step">
+                    <summary>
+                      ⚙ {message.tool} {message.ok ? "" : "（执行失败）"}
+                    </summary>
+                    <pre>{message.result}</pre>
+                  </details>
+                ) : (
+                  message.content
+                )}
               </div>
             </div>
           ))}
