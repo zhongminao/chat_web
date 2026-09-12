@@ -1,7 +1,7 @@
 # chat
 
 React + FastAPI 的聊天服务，后端带一个能真的动手的 agent（读写文件、跑 bash）。
-模型走 OpenAI 兼容接口（gpt / qwen / deepseek / local_qwen）。
+模型走 OpenAI 兼容接口（provider：`gpt` / `deepseek` / `local_qwen`）。
 
 ```
 tools/chat/                      # 仓库根（git 在这一层）
@@ -51,14 +51,19 @@ pnpm run check      # build + smoke（jsdom 里真跑一遍产物）
 
 | 变量 | 真实文件 | 谁在读 |
 |---|---|---|
-| `GPT_API_KEY` / `DEEPSEEK_API_KEY` / `QWEN_API_KEY` / `LOCAL_QWEN_API_KEY` | `~/.bashrc` | `src/chat/app.py` |
+| `GPT_API_KEY` / `DEEPSEEK_API_KEY` / `LOCAL_QWEN_API_KEY` | `~/.bashrc` | `src/chat/app.py` 的 `ensure_runtime_env()` |
 | `CHAT_STORAGE` / `CHAT_WORKSPACE` | `chat.service` 的 `Environment=` | `src/chat/app.py`：运行时数据位置 / 默认工作区根 |
 | `LOCAL_QWEN_MODEL_DIR` / `LOCAL_QWEN_MODEL_NAME` | **可选覆盖**，默认值在脚本里 | `start_local_qwen.sh` —— 只管**启动 vLLM 服务**，chat 不读它们 |
 
-- **`local_qwen` 一个环境变量都不用设**：base_url、模型名、api_key 全写在 `providers.yaml`
-  里（`base_url` / `models[0].id` / `api_key_default`）。要指向别的机器就改 yaml 的
-  `base_url` —— 不再有"环境变量覆盖"这条路（曾经有 `base_url_env` / `model_name_env`，
-  但对 systemd 起的服务本来就连不上 shell 环境，留着只是多一层没用的间接）
+- **`local_qwen` 默认一个环境变量都不用设**：base_url、模型名、api_key 都在 `providers.yaml`
+  里。要指向别的机器就改 yaml 的 `base_url` —— 不再有"环境变量覆盖"这条路（曾经有
+  `base_url_env` / `model_name_env`，但那条路只靠**继承 shell 环境**，systemd 起的服务
+  继承不到，留着只是多一层无效的间接）
+- local_qwen 的 `api_key_default: local_qwen` **不是密钥，是占位**：vLLM 不校验 key，
+  但 `openai` 客户端库不给非空 key 就直接 `OpenAIError: Missing credentials` 构造不出来。
+  真给 vLLM 加了 `--api-key` 时才需要在 `~/.bashrc` 里 `export LOCAL_QWEN_API_KEY="..."`
+  —— 注意这条**走的是"读文件"而不是"继承环境"**（`ensure_runtime_env()` 去解析 `~/.bashrc`），
+  所以 systemd 服务能拿到。这也是 `api_key_env` 这个键留着、而 `base_url_env` 该删的区别
 - `LOCAL_QWEN_MODEL_DIR` / `LOCAL_QWEN_MODEL_NAME` 不属于客户端配置：它们决定 **vLLM 从
   哪个目录加载模型、对外报什么模型名**，归启动脚本管。改 `_MODEL_NAME` 时记得把 yaml 里
   的 `models[0].id` 一起改，否则请求会报模型不存在
