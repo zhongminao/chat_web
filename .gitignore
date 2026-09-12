@@ -16,6 +16,16 @@ dist/
 *.log
 *.tmp
 
+# 密钥与运行时配置：真实文件在 ~/.config/{chat,fortrix}/ 与 /usr/local/etc/cpolar/，
+# 仓库里只允许 *.env.example 模板。这条是保险，别删。
+*.env
+*.env.*
+!*.env.example
+
+# 野软链接：llm_client/llm_client/pi -> ../../pi（另一个 TS 项目），
+# 无任何代码引用，2026-09-04 误建。不进仓库（删掉更好）。
+llm_client/llm_client/pi
+
 # UI 改造前的本地备份：留在磁盘上备查，但不进版本库
 # （git 已经有历史了，这类目录进仓库只会让 diff 变脏）
 static-backup-*/

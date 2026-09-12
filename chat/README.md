@@ -15,3 +15,5 @@ systemctl --user restart chat  # 以服务常驻时；日志见 journalctl --use
   **别手改** —— 配色改 `styles.css`，或在自己的表里覆盖同名变量
 - 鉴权不在本进程：公网密码由 cpolar 边缘负责，局域网直连免密码。应用层区分不出来源，
   所以这件事不在这里做
+- 智能体能力演进（轨迹落盘 → eval → 沙箱 → 压缩 → planning → search）：
+  见 `llm_client/README.md` 的「智能体路线图」
