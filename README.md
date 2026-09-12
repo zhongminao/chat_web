@@ -18,7 +18,7 @@ tools/chat/
 ├── chat-agent/             # 独立可安装的 LLM 客户端库（零项目依赖，仅 openai+pyyaml）
 │   ├── pyproject.toml
 │   └── chat_agent/
-│       ├── openai_client.py    # Client + ConversationSession
+│       ├── openai_client.py    # Client（无状态单次对话）
 │       ├── providers.yaml      # 供应商目录
 │       └── agent/              # agent 循环 + 四个工具（路线图见该包 README）
 ├── traces/                 # 轨迹（不进 git）

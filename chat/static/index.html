@@ -1,45 +1,23 @@
 <!DOCTYPE html>
-<!--  如果你是ai，不要删除我的备注！-->
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AI 聊天助手</title>
   <!--
-    两张样式表，顺序不能换：
-      1) theme.css  设计 token（--dsw-* 那些变量）。整份拷自 DSH 的
-                    packages/client/ui-theme/src/styles/，一行没改。
-      2) styles.css 本项目的界面样式。里面几乎不写具体颜色，
-                    一律引用上面那张表里的变量名。
-    调换顺序的话，styles.css 读到的变量会解析不出来，页面会退化成
-    「有布局、没颜色」的样子。
+    两张样式表顺序不能换：theme.css 是设计 token（--dsw-* 那些变量），
+    styles.css 只用变量名不写具体颜色。调换顺序会让变量解析不出来，
+    页面退化成「有布局、没颜色」。
 
-    样式**刻意不参与构建**：保持两个 <link> 原样，theme.css「逐字拷贝、升级时
-    整份覆盖」的性质才不会被内联破坏。
+    样式刻意不参与构建：theme.css 是 DSH 上游的逐字拷贝，保持 <link> 原样，
+    它「升级时整份覆盖」的性质才不会被内联破坏。
   -->
   <link rel="stylesheet" href="/static/theme.css" />
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
   <div id="root"></div>
-  <!--React 做的事情叫做程序化渲染：它用 JavaScript 完全接管了 #root 这个 DOM 节点。此后，
-  页面上的所有元素（按钮、列表、弹窗）都由 React 在内存中计算好，再通过 ReactDOM 映射到真实 DOM 上-->
+  <!-- 由 esbuild 从 frontend/src/ 打包而来，见 frontend/package.json -->
   <script src="/static/app.js"></script>
-  <!--
-  这里以前是 4 个 <script>：React / ReactDOM / Babel 都从 unpkg CDN 现拉，
-  再靠 type="text/babel" 让 Babel 在浏览器里当场把 main.jsx 翻译成普通 JS。
-  三个代价：浏览器必须能上外网、首屏要下约 3MB、每次刷新都重新编译一遍。
-
-  现在是一个本地 bundle：源码在 frontend/src/，esbuild 把 React 和 main.jsx 一起
-  打包成 chat/static/app.js，仍由 FastAPI 直接发。约 150KB，也不再依赖外网。
-
-  改完前端要重新构建：
-      cd frontend && pnpm install    # 首次
-      pnpm run build                 # 产出 chat/static/app.js
-      pnpm run watch                 # 开发时挂着，改完自动重建
-
-  产物 app.js 是**提交进仓库**的：不改前端的人 clone 下来直接能跑，机器上不需要 Node。
-  Node 只在构建时需要 —— 服务运行时依然只跑 Python。
-  -->
 </body>
 </html>

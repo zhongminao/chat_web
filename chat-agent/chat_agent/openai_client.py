@@ -1,11 +1,12 @@
 """自包含 LLM 客户端库（零项目依赖）。
 
-两个职责互补的组件：
-- ConversationSession  有状态会话历史容器（不认识任何 LLM 服务）
-- Client               无状态单次对话执行者（provider 解析 / api_key / 调用 / 解析）
+单次对话执行者：provider 解析 / api_key / 调用 OpenAI 兼容接口 / 解析。
+
+**会话历史不在这里。** 这里曾经有一个 ConversationSession（服务端历史容器），
+2026-09-12 删除 —— 改为把历史交给会话日志（chat_agent.agent.session_store），
+日志即权威、历史由重放得到，不再需要另存一份内存里的会话对象。
 
 合并自 IM_Opt 的 LLM/util/openai_client.py + graph/util/dialogue/conversation_session.py：
-- 消除两处重复的 _copy_message
 - 删除从未被调用的流式解析分支 _assistant_message_from_stream（stream 恒为 False）
 """
 
@@ -126,101 +127,6 @@ def create_client(
     )
 
 
-# ============================================================
-# 有状态会话容器
-# ============================================================
-
-class ConversationSession:
-    """管理一段多轮对话的消息历史（不感知任何 LLM 服务）。"""
-
-    def __init__(
-        self,
-        messages: list[dict[str, Any]] | None = None,
-        ) -> None:
-        self._messages: list[dict[str, Any]] = []
-
-        if messages is not None:
-            for message in messages:
-                self.append_message(message)
-
-    @property
-    def message_count(
-        self,
-        ) -> int:
-        return len(self._messages)
-
-    def set_system_message(
-        self,
-        content: str,
-        ) -> None:
-        system_message = {
-            "role": "system",
-            "content": str(content),
-        }
-
-        if self._messages and self._messages[0]["role"] == "system":
-            self._messages[0] = system_message
-            return
-
-        self._messages.insert(0, system_message)
-
-    def append_message(
-        self,
-        message: dict[str, Any],
-        ) -> None:
-        self._messages.append(_copy_message(message))
-
-    def append_user_message(
-        self,
-        content: str,
-        ) -> None:
-        self.append_message(
-            {
-                "role": "user",
-                "content": str(content),
-            }
-        )
-
-    def append_assistant_message(
-        self,
-        content: str,
-        tool_calls: list[dict[str, Any]] | None = None,
-        ) -> None:
-        assistant_message: dict[str, Any] = {
-            "role": "assistant",
-            "content": str(content),
-        }
-
-        if tool_calls is not None and tool_calls:
-            assistant_message["tool_calls"] = _copy_message(tool_calls)
-        self.append_message(assistant_message)
-
-    def append_tool_message(
-        self,
-        tool_call_id: str,
-        tool_name: str,
-        content: str,
-        ) -> None:
-        self.append_message(
-            {
-                "role": "tool",
-                "tool_call_id": str(tool_call_id),
-                "name": str(tool_name),
-                "content": str(content),
-            }
-        )
-
-    def export_messages(
-        self,
-        ) -> list[dict[str, Any]]:
-        return [_copy_message(message) for message in self._messages]
-
-    def clear(
-        self,
-        ) -> None:
-        self._messages.clear()
-
-
 def _copy_message(
     message: dict[str, Any],
     ) -> dict[str, Any]:
@@ -247,7 +153,6 @@ class Client:
     """无状态 LLM 通道：一次请求 ↔ 一次回复，不记历史。
 
     配置（provider / api_key / base_url / model / temperature）来自 providers.yaml；
-    有上下文的连续对话请配合 ConversationSession 使用 complete_session()。
     """
 
     def __init__(
@@ -276,16 +181,6 @@ class Client:
             )
         else:
             self.client = OpenAI(api_key=api_key)
-
-    def new_session(
-        self,
-        system_message: str | None = None,
-        messages: list[dict[str, Any]] | None = None,
-        ) -> ConversationSession:
-        session = ConversationSession(messages=messages)
-        if system_message is not None:
-            session.set_system_message(system_message)
-        return session
 
     def __call__(
         self,
@@ -323,19 +218,6 @@ class Client:
             finish_reason=finish_reason,
         )
         metadata["assistant_message"] = _copy_message(assistant_message)
-        return assistant_message, metadata
-
-    def complete_session(
-        self,
-        session: ConversationSession,
-        tools: list[dict[str, Any]] | None = None,
-        ) -> tuple[dict[str, Any], dict[str, Any]]:
-        assistant_message, metadata = self.request_assistant_message(
-            messages=session.export_messages(),
-            tools=tools,
-        )
-        session.append_message(assistant_message)
-        metadata["session_message_count"] = session.message_count
         return assistant_message, metadata
 
     @staticmethod

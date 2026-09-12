@@ -14,8 +14,7 @@ STATIC_DIR = BASE_DIR / "static"
 # 运行时数据放在仓库内的 storage/ 下（不进 git，见 .gitignore）—— 放在手边才找得到。
 # 位置由这里决定而不是 chat_agent：那个包是独立可安装的，不该知道仓库布局。
 STORAGE_DIR = BASE_DIR.parent / "storage"
-TRACE_DIR = STORAGE_DIR / "traces"       # 无状态请求的轨迹
-SESSION_DIR = STORAGE_DIR / "sessions"   # 会话日志（会话模式下它就是状态）
+SESSION_DIR = STORAGE_DIR / "sessions"   # 会话日志就是状态本身
 DEFAULT_PROVIDER = "gpt"
 DEFAULT_MODEL_NAME = "gpt-5.5"
 DEFAULT_TEMPERATURE = 0.2
@@ -46,7 +45,7 @@ TOOL_SYSTEM_PROMPT = (
 )
 
 from chat_agent import create_client, get_model_temperature, list_providers
-from chat_agent.agent import run_agent_turn, session_store, write_trace
+from chat_agent.agent import run_agent_turn, session_store
 
 
 class TurnResult(NamedTuple):
@@ -65,22 +64,19 @@ class ChatMessage(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    # sessionId 缺失时 = 无状态模式，messages 是全量历史（旧行为，保留兼容）。
-    # sessionId 给定时 = 会话模式，messages 只是**本轮新增**的消息 ——
-    # 历史由服务端从会话日志重放。这个语义差别是必须的：不然服务端每轮都把
-    # 客户端带来的全量历史再写进日志一遍，正是要消掉的那份重复。
+    # sessionId 必填：历史由服务端按会话日志重放，前端只发**本轮新增**的消息。
+    # 没有"无状态模式"这一说 —— 前端不再持有历史，也就没有全量重发这回事。
+    sessionId: str
     messages: list[ChatMessage] = Field(default_factory=list)
-    sessionId: str | None = None
     provider: str = DEFAULT_PROVIDER
     model_name: str = DEFAULT_MODEL_NAME
     temperature: float | None = None  # None → 使用 providers.yaml 里该模型的默认温度
-    system_prompt: str | None = None   # 新增：None/空 → 用 DEFAULT_SYSTEM_PROMPT
-    tools_enabled: bool = False        # 新增：True → 系统提示词介绍工具（配合后端工具调用）
+    system_prompt: str | None = None   # None → 用 DEFAULT_SYSTEM_PROMPT；"" → 一条 system 都不发
+    tools_enabled: bool = False        # True → 附带工具并允许模型调用
 
 class ChatResponse(BaseModel):
     reply: str
     steps: list[dict] = Field(default_factory=list)  # 工具执行流水账（agent 模式才有）
-    trace: list[dict] = Field(default_factory=list)  # 本次产生的协议消息，前端存下来跨轮回放
 
 
 app = FastAPI(title="chat-app")
@@ -213,35 +209,23 @@ def elapsed_ms(
     return int((time.monotonic() - started) * 1000)
 
 
-def record_trace(
-    payload: ChatRequest,
-    duration_ms: int,
-    result: "TurnResult | None" = None,
-    error: str | None = None,
-    ) -> None:
-    """把一次请求写进轨迹文件。
+def effective_system_prompt(
+    normalized_messages: list[dict],
+    ) -> str | None:
+    """归一化后真正发给模型的那条 system 消息；没有则 None。
 
-    刻意不 try/except：write_trace 自己就是 fail-soft 的（异常吞掉、只写 stderr），
-    所以这里再包一层只会掩盖问题。轨迹写不进去也绝不该弄死一次对话。
+    记这个而不是请求里的 system_prompt 原值：那个可能是 None（用默认提示词）或 ""
+    （一条 system 都不发），两个都不等于模型实际看到的东西。
     """
-    write_trace(
-        provider=payload.provider,
-        model_name=payload.model_name,
-        temperature=result.temperature if result else payload.temperature,
-        tools_enabled=payload.tools_enabled,
-        system_prompt=payload.system_prompt,
-        messages=result.messages if result else [],
-        steps=result.steps if result else [],
-        reply=result.reply if result else "",
-        duration_ms=duration_ms,
-        error=error,
-        directory=TRACE_DIR,
-    )
+    for message in normalized_messages:
+        if message.get("role") == "system":
+            return message.get("content")
+    return None
 
 
 def request_real_reply(
     payload: ChatRequest,
-    prior_messages: list[ChatMessage] | None = None,
+    prior_messages: list[ChatMessage],
     ) -> "TurnResult":
     ensure_runtime_env(payload.provider)
     temperature = payload.temperature
@@ -255,9 +239,9 @@ def request_real_reply(
         model_name=payload.model_name,
         temperature=temperature,
     )
-    # 会话模式下 prior_messages 是重放出来的历史；无状态模式为 None。
-    # 两者都走同一个 normalize_messages —— 归一化只有一条路径，不会漂移。
-    combined = payload.messages if prior_messages is None else [*prior_messages, *payload.messages]
+    # 历史（prior_messages）由会话日志重放，拼上本轮新增的消息，再走 normalize_messages。
+    # 归一化只有这一条路径，不另写一份。
+    combined = [*prior_messages, *payload.messages]
     normalized_messages = normalize_messages(
         combined,
         payload.system_prompt,
@@ -318,13 +302,11 @@ def providers(
 
 def resolve_session_id(
     payload: ChatRequest,
-    ) -> str | None:
-    """校验客户端给的 sessionId。给了但不合法 → 400，不做"尽力清洗"。
+    ) -> str:
+    """校验 sessionId，不合法 → 400，不做"尽力清洗"。
 
     它会被当文件名用，而服务在局域网可达 —— 放行 "../../x" 就是一次路径穿越。
     """
-    if payload.sessionId is None:
-        return None
     session_id = session_store.sanitize_id(payload.sessionId)
     if session_id is None:
         raise HTTPException(status_code=400, detail="invalid sessionId")
@@ -365,50 +347,44 @@ def chat(
     ) -> ChatResponse:
     started = time.monotonic()
     session_id = resolve_session_id(payload)
-    prior_messages: list[ChatMessage] | None = None
-    if session_id is not None:
-        prior_messages = [
-            ChatMessage(**record) for record in session_store.load_history(SESSION_DIR, session_id)
-        ]
+    # 历史从会话日志重放 —— 客户端只发本轮新增，服务端不信任它带的历史。
+    prior_messages = [
+        ChatMessage(**record) for record in session_store.load_history(SESSION_DIR, session_id)
+    ]
 
     try:
         result = request_real_reply(payload, prior_messages)
     except Exception as exc:
-        if session_id is not None:
-            # 失败时**不往历史里写 user 消息**：那条提问没有对应的回答，留在历史里
-            # 会让下一次重试把同一句话追加第二遍。失败只记在 turn 记录里
-            # （turn 不是历史类型，重放会跳过），内容放在 attempted 字段备查。
-            session_store.append_turn(
-                SESSION_DIR, session_id,
-                user_messages=[], protocol=[],
-                meta={
-                    "error": str(exc),
-                    "attempted": [message.content for message in payload.messages],
-                },
-            )
-        else:
-            record_trace(payload, elapsed_ms(started), error=str(exc))
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-    duration_ms = elapsed_ms(started)
-    if session_id is not None:
-        # 会话模式只写会话日志，不再另写轨迹 —— 日志本身就是记录，
-        # 写两份就是同一份信息存两遍（steps 也能从协议消息折出来）。
+        # 失败时**不往历史里写 user 消息**：那条提问没有对应的回答，留在历史里
+        # 会让重试把同一句话追加第二遍。失败只记在 turn 记录里（turn 不是历史类型，
+        # 重放会跳过），内容放 attempted 字段备查。
         session_store.append_turn(
             SESSION_DIR, session_id,
-            user_messages=[message.model_dump() for message in payload.messages],
-            protocol=result.trace,
+            user_messages=[], protocol=[],
             meta={
-                "provider": payload.provider,
-                "model": payload.model_name,
-                "temperature": result.temperature,
-                "toolsEnabled": payload.tools_enabled,
-                "systemPrompt": payload.system_prompt,
-                "durationMs": duration_ms,
+                "error": str(exc),
+                "attempted": [message.content for message in payload.messages],
             },
         )
-    else:
-        record_trace(payload, duration_ms, result=result)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    return ChatResponse(reply=result.reply, steps=result.steps, trace=result.trace)
+    # 只写会话日志，不另写轨迹 —— 日志本身就是记录，写两份等于同一份信息存两遍
+    # （steps 也能从协议消息折出来）。
+    session_store.append_turn(
+        SESSION_DIR, session_id,
+        user_messages=[message.model_dump() for message in payload.messages],
+        protocol=result.trace,
+        meta={
+            "provider": payload.provider,
+            "model": payload.model_name,
+            "temperature": result.temperature,
+            "toolsEnabled": payload.tools_enabled,
+            # 记**实际生效**的 system 消息（归一化后拼进去的那条），不是请求里那个
+            # 可能为 None 的原值 —— 否则事后没法还原模型到底看到了什么。
+            "systemPrompt": effective_system_prompt(result.messages),
+            "durationMs": elapsed_ms(started),
+        },
+    )
+
+    return ChatResponse(reply=result.reply, steps=result.steps)
 

@@ -3,9 +3,8 @@
 agent 运行时与 LLM 客户端（零项目依赖），提供：
 
 - **`Client`**：无状态单次对话执行者 —— provider 解析、api_key/base_url、调用 OpenAI 兼容接口、响应解析
-- **`ConversationSession`**：有状态会话历史容器 —— 多轮对话的 system/user/assistant/tool 消息管理
 - **供应商目录**：`providers.yaml`（gpt / qwen / deepseek / local_qwen），随包分发
-- **`agent/`**：工具调用循环（read/write/edit/bash）+ 观测守卫 + spill + 轨迹落盘
+- **`agent/`**：工具调用循环（read/write/edit/bash）+ 观测守卫 + spill + **会话日志**
 
 仅依赖 `openai` 和 `pyyaml`。
 
@@ -56,22 +55,22 @@ pip install /path/to/chat_agent
 ## 使用
 
 ```python
-from chat_agent import Client, ConversationSession, create_client, list_providers
+from chat_agent import Client, create_client, list_providers
 
 # 列出供应商/模型（供前端选择器）
 list_providers()
 
 # 单次对话（无状态）
-client = create_client(provider="gpt", model_name="gpt-5.4")
+client = create_client(provider="gpt", model_name="gpt-5.5")
 reply, metadata = client.request_assistant_message(
     messages=[{"role": "user", "content": "你好"}],
 )
-
-# 多轮对话（有状态）
-session = client.new_session(system_message="You are helpful.")
-session.append_user_message("你好")
-reply, metadata = client.complete_session(session)
 ```
+
+多轮对话不在这里 —— 历史由 `agent.session_store` 的会话日志承载（一个会话一个
+append-only JSONL，历史用重放得到）。原先的 `ConversationSession` 与
+`Client.new_session()` / `complete_session()` 已于 2026-09-12 删除：内存里再存
+一份历史，就会和落盘的记录对不上。
 
 API key 通过环境变量提供（`GPT_API_KEY` / `QWEN_API_KEY` / `DEEPSEEK_API_KEY` / `LOCAL_QWEN_API_KEY`），详见 `chat_agent/providers.yaml`。
 
@@ -102,14 +101,13 @@ chat-agent/                 # 项目目录：连字符，刻意不与包名同�
 ├── demo_agent_loop.py      # agent 循环的可跑示例（不在包内，不随包分发）
 └── chat_agent/             # 包目录：下划线，可被 import
     ├── __init__.py         # re-export 公开 API
-    ├── openai_client.py    # Client + ConversationSession 实现
+    ├── openai_client.py    # Client 实现（无状态）
     ├── providers.yaml      # 供应商目录（随包分发，__file__ 相对加载）
-    ├── test.py             # 空文件
     └── agent/
-        ├── __init__.py     # 对外暴露 run_agent_turn / TOOL_SCHEMAS / execute_tool / write_trace
+        ├── __init__.py     # 对外暴露 run_agent_turn / TOOL_SCHEMAS / execute_tool / session_store
         ├── loop.py         # run_agent_turn：多轮工具调用循环
         ├── tools.py        # 四个工具实现 + schema + execute_tool 分发
         ├── observed.py     # 观测状态：先读后改 + 变更提醒
         ├── spill.py        # 超长输出全文落盘，内联只留预览 + 定位符
-        └── trace_log.py    # 轨迹落盘（一次请求一个 JSONL）
+        └── session_store.py # 会话日志：append-only JSONL，历史用重放得到
 ```
