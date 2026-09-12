@@ -28,6 +28,7 @@ from chat.runtime import (
     DEFAULT_MODEL_NAME,
     DEFAULT_PROVIDER,
     SESSION_DIR,
+    STORAGE_DIR,
     ChatMessage,
     TurnRequest,
     effective_system_prompt,
@@ -188,6 +189,9 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"会话 {session_id}")
     print(f"工作区 {workspace.get('name')} → {workspace.get('root')}")
+    # 把数据目录打出来：位置一旦解析错（比如没找到仓库根、落到包目录旁边），
+    # 表现是"历史全是空的"，而这件事以前完全没有提示 —— 踩过。
+    print(f"数据 {STORAGE_DIR}")
     print(f"模型 {args.provider}/{args.model}｜工具 {'开' if tools_enabled else '关'}"
           f"（首轮定下，之后沿用）")
     if overridden:
