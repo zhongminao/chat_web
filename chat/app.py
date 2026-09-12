@@ -14,6 +14,7 @@ STATIC_DIR = BASE_DIR / "static"
 # 轨迹落在仓库内的 traces/ 下（不进 git，见 .gitignore）—— 放在手边才找得到。
 # 位置由这里决定而不是 chat_agent：那个包是独立可安装的，不该知道仓库布局。
 TRACE_DIR = BASE_DIR.parent / "traces"
+SESSION_DIR = BASE_DIR.parent / "sessions"
 DEFAULT_PROVIDER = "gpt"
 DEFAULT_MODEL_NAME = "gpt-5.5"
 DEFAULT_TEMPERATURE = 0.2
@@ -44,7 +45,7 @@ TOOL_SYSTEM_PROMPT = (
 )
 
 from chat_agent import create_client, get_model_temperature, list_providers
-from chat_agent.agent import run_agent_turn, write_trace
+from chat_agent.agent import run_agent_turn, session_store, write_trace
 
 
 class TurnResult(NamedTuple):
@@ -63,7 +64,12 @@ class ChatMessage(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    messages: list[ChatMessage]
+    # sessionId 缺失时 = 无状态模式，messages 是全量历史（旧行为，保留兼容）。
+    # sessionId 给定时 = 会话模式，messages 只是**本轮新增**的消息 ——
+    # 历史由服务端从会话日志重放。这个语义差别是必须的：不然服务端每轮都把
+    # 客户端带来的全量历史再写进日志一遍，正是要消掉的那份重复。
+    messages: list[ChatMessage] = Field(default_factory=list)
+    sessionId: str | None = None
     provider: str = DEFAULT_PROVIDER
     model_name: str = DEFAULT_MODEL_NAME
     temperature: float | None = None  # None → 使用 providers.yaml 里该模型的默认温度
@@ -234,6 +240,7 @@ def record_trace(
 
 def request_real_reply(
     payload: ChatRequest,
+    prior_messages: list[ChatMessage] | None = None,
     ) -> "TurnResult":
     ensure_runtime_env(payload.provider)
     temperature = payload.temperature
@@ -247,8 +254,11 @@ def request_real_reply(
         model_name=payload.model_name,
         temperature=temperature,
     )
+    # 会话模式下 prior_messages 是重放出来的历史；无状态模式为 None。
+    # 两者都走同一个 normalize_messages —— 归一化只有一条路径，不会漂移。
+    combined = payload.messages if prior_messages is None else [*prior_messages, *payload.messages]
     normalized_messages = normalize_messages(
-        payload.messages,
+        combined,
         payload.system_prompt,
         tools_enabled=payload.tools_enabled,
     )
@@ -259,7 +269,12 @@ def request_real_reply(
         assistant_message, _ = client.request_assistant_message(
             messages=normalized_messages,
         )
-        reply, steps, trace = str(assistant_message["content"]), [], []
+        reply = str(assistant_message["content"])
+        steps = []
+        # trace 的不变式：本轮产生的协议消息，**总以最终 assistant 消息结尾**。
+        # 非工具模式过去返回 []，后果是回放的历史里没有 assistant 轮 ——
+        # 前端 protocol 只收 user 消息，模型记不住自己说过什么（会话日志同样缺）。
+        trace = [{"role": "assistant", "content": reply}]
 
     return TurnResult(
         reply=reply,
@@ -300,17 +315,100 @@ def providers(
     }
 
 
+def resolve_session_id(
+    payload: ChatRequest,
+    ) -> str | None:
+    """校验客户端给的 sessionId。给了但不合法 → 400，不做"尽力清洗"。
+
+    它会被当文件名用，而服务在局域网可达 —— 放行 "../../x" 就是一次路径穿越。
+    """
+    if payload.sessionId is None:
+        return None
+    session_id = session_store.sanitize_id(payload.sessionId)
+    if session_id is None:
+        raise HTTPException(status_code=400, detail="invalid sessionId")
+    return session_id
+
+
+@app.post("/api/sessions")
+def create_session(
+    ) -> dict:
+    return {"id": session_store.new_id()}
+
+
+@app.get("/api/sessions")
+def list_sessions(
+    ) -> dict:
+    return {"sessions": session_store.list_sessions(SESSION_DIR)}
+
+
+@app.get("/api/sessions/{session_id}")
+def get_session(
+    session_id: str,
+    ) -> dict:
+    """取一场会话，供前端渲染：对话消息 + 工具流水账（后者从日志折出来，不落盘）。"""
+    safe_id = session_store.sanitize_id(session_id)
+    if safe_id is None or not session_store.exists(SESSION_DIR, safe_id):
+        raise HTTPException(status_code=404, detail="session not found")
+
+    history = session_store.load_history(SESSION_DIR, safe_id)
+    messages = [
+        {"role": message["role"], "content": message["content"]}
+        for message in history
+        if message["role"] in ("user", "assistant")
+    ]
+    return {
+        "id": safe_id,
+        "messages": messages,
+        "steps": session_store.derive_steps(history),
+    }
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(
     payload: ChatRequest,
     ) -> ChatResponse:
     started = time.monotonic()
+    session_id = resolve_session_id(payload)
+    prior_messages: list[ChatMessage] | None = None
+    if session_id is not None:
+        prior_messages = [
+            ChatMessage(**record) for record in session_store.load_history(SESSION_DIR, session_id)
+        ]
+
     try:
-        result = request_real_reply(payload)
+        result = request_real_reply(payload, prior_messages)
     except Exception as exc:
-        record_trace(payload, elapsed_ms(started), error=str(exc))
+        if session_id is not None:
+            # 会话模式下日志就是状态，失败也要留痕（否则下一轮历史里少了这次提问）
+            session_store.append_turn(
+                SESSION_DIR, session_id,
+                user_messages=[message.model_dump() for message in payload.messages],
+                protocol=[], meta={"error": str(exc)},
+            )
+        else:
+            record_trace(payload, elapsed_ms(started), error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    record_trace(payload, elapsed_ms(started), result=result)
+    duration_ms = elapsed_ms(started)
+    if session_id is not None:
+        # 会话模式只写会话日志，不再另写轨迹 —— 日志本身就是记录，
+        # 写两份就是同一份信息存两遍（steps 也能从协议消息折出来）。
+        session_store.append_turn(
+            SESSION_DIR, session_id,
+            user_messages=[message.model_dump() for message in payload.messages],
+            protocol=result.trace,
+            meta={
+                "provider": payload.provider,
+                "model": payload.model_name,
+                "temperature": result.temperature,
+                "toolsEnabled": payload.tools_enabled,
+                "systemPrompt": payload.system_prompt,
+                "durationMs": duration_ms,
+            },
+        )
+    else:
+        record_trace(payload, duration_ms, result=result)
+
     return ChatResponse(reply=result.reply, steps=result.steps, trace=result.trace)
 
