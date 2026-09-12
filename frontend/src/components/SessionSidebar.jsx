@@ -36,7 +36,22 @@ export default function SessionSidebar({
   const [isAdding, setIsAdding] = useState(false);
   const [pathDraft, setPathDraft] = useState("");
   const [error, setError] = useState("");
+  // 搜索展开是独立状态，不跟 query 绑：点开还没打字时也要展开。
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const menuRef = useRef(null);
+  const searchRef = useRef(null);
+
+  // 搜索只过滤已加载的列表（服务端一次给全），所以是纯前端的事，不用新接口。
+  const keyword = query.trim();
+  const visibleSessions = keyword
+    ? sessions.filter((session) => session.title.includes(keyword))
+    : sessions;
+
+  function closeSearch() {
+    setSearchOpen(false);
+    setQuery("");
+  }
 
   // 点菜单外面关掉。挂在 document 上才能知道点到的是外面；ref 挂最外层，
   // 让按钮和菜单算作同一块内部区域，否则点按钮会被判成外部点击。
@@ -168,6 +183,8 @@ export default function SessionSidebar({
               </div>
             ))}
 
+            {/* 添加入口在区块头的 ＋（对齐上游 workspace.add 的位置），
+                所以这里不再放一个「添加工作区…」—— 两个入口做同一件事只会让人犹豫。 */}
             {isAdding ? (
               <form className="workspace-add" onSubmit={submitWorkspace}>
                 <input
@@ -178,15 +195,7 @@ export default function SessionSidebar({
                   aria-label="新工作区路径"
                 />
               </form>
-            ) : (
-              <button
-                type="button"
-                className="workspace-option-main is-add"
-                onClick={() => setIsAdding(true)}
-              >
-                <span className="workspace-option-name">添加工作区…</span>
-              </button>
-            )}
+            ) : null}
 
             {error ? <div className="workspace-error">{error}</div> : null}
           </div>
@@ -197,11 +206,77 @@ export default function SessionSidebar({
         新对话
       </button>
 
+      {/* 区块头：标签 + 内联搜索。展开搜索时标签与按钮一起收起来给它让位 ——
+          这套联动是 DSH 那层的做法（ui-workspace 的 sectionHeader/sectionLabel/
+          searchSlot/headerActions），过渡靠 CSS 的 max-width + opacity 做，
+          不是靠条件渲染硬切。 */}
+      <div className="section-header">
+        <span className={searchOpen ? "section-label is-hidden" : "section-label"}>会话</span>
+        <div className={searchOpen ? "section-search-slot is-expanded" : "section-search-slot"}>
+          <button
+            type="button"
+            className="section-icon-button"
+            onClick={() => {
+              setSearchOpen(true);
+              searchRef.current?.focus();
+            }}
+            disabled={searchOpen}
+            aria-label="搜索会话"
+            title="搜索会话"
+          >
+            ⌕
+          </button>
+          <input
+            ref={searchRef}
+            className="section-search-input"
+            type="text"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                closeSearch();
+              }
+            }}
+            tabIndex={searchOpen ? 0 : -1}
+            placeholder="搜索标题"
+            aria-label="搜索会话"
+          />
+          {/* 清空按钮在搜索槽里面（上游的 clearButton 也在 search 里）——
+              放进右边那组动作里会被"搜索展开时隐藏"的规则一起藏掉。 */}
+          <button
+            type="button"
+            className="section-clear-button"
+            onClick={closeSearch}
+            aria-label="清空搜索"
+            title="清空搜索"
+          >
+            ✕
+          </button>
+        </div>
+        <div className={searchOpen ? "section-actions is-hidden" : "section-actions"}>
+          <button
+            type="button"
+            className="section-icon-button"
+            onClick={() => {
+              setIsMenuOpen(true);
+              setIsAdding(true);
+              setError("");
+            }}
+            aria-label="添加工作区"
+            title="添加工作区"
+          >
+            ＋
+          </button>
+        </div>
+      </div>
+
       <nav className="session-list">
-        {sessions.length === 0 ? (
-          <div className="session-empty">还没有对话</div>
+        {visibleSessions.length === 0 ? (
+          <div className="session-empty">
+            {keyword ? "没有匹配的会话" : "还没有对话"}
+          </div>
         ) : (
-          sessions.map((session) => (
+          visibleSessions.map((session) => (
             <button
               key={session.id}
               type="button"
@@ -217,6 +292,9 @@ export default function SessionSidebar({
           ))
         )}
       </nav>
+      {/* 列表底部的渐隐：滚到底时最后一行淡出，而不是被硬切一刀。
+          指针事件关掉，它只是视觉层。 */}
+      <div className="session-list-fade" aria-hidden="true" />
     </aside>
   );
 }

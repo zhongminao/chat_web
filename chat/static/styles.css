@@ -52,6 +52,7 @@
 
 .sidebar {
   --dsh-sidebar-inline-padding: 12px;
+  position: relative;         /* 底部渐隐层的定位基准 */
   flex: none;
   display: flex;
   flex-direction: column;
@@ -294,7 +295,175 @@
   background: var(--dsw-alias-button-floating-hover);
 }
 
+/* 区块头（上游 WorkspaceBrowser 的 sectionHeader）：36px、右对齐、gap 4，
+   左边留 4、右边出血 4，圆角 12 且 overflow hidden —— 后面那些 max-width 过渡
+   要靠这个裁切才不至于溢出。 */
+.section-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  height: 36px;
+  padding-left: 4px;
+  margin-top: 2px;
+  margin-right: -4px;
+  margin-bottom: 4px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 标签被搜索挤走：收 max-width + 淡出，不是 display:none。
+   收 max-width 才有过渡，display 是瞬变。 */
+.section-label {
+  flex: none;
+  max-width: 45%;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  line-height: 20px;
+  transition:
+    max-width 180ms var(--ds-ease-in-out),
+    opacity 120ms var(--ds-ease-in-out),
+    visibility 0s linear;
+}
+
+.section-label.is-hidden {
+  max-width: 0;
+  margin-right: -4px;
+  opacity: 0;
+  visibility: hidden;
+  transition-delay: 0s, 0s, 180ms;
+}
+
+/* 搜索槽：收起时只占一个 28px 圆钮的宽度，展开时吃掉整行。 */
+.section-search-slot {
+  flex: 1;
+  max-width: 28px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  overflow: hidden;
+  transition: max-width 180ms var(--ds-ease-in-out);
+}
+
+.section-search-slot.is-expanded {
+  max-width: 100%;
+}
+
+.section-search-input {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  height: 28px;
+  padding: 0 2px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 13px;
+  /* 收起时不可点也不可见，避免 Tab 停在看不见的输入框上 */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms var(--ds-ease-in-out);
+}
+
+.section-search-slot.is-expanded .section-search-input {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.section-search-input::placeholder {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.section-clear-button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.section-clear-button:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* 右侧动作簇（上游的 headerActions）：搜索展开时整体收起让位。 */
+.section-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 60px;
+  overflow: hidden;
+  transition:
+    max-width 180ms var(--ds-ease-in-out),
+    opacity 120ms var(--ds-ease-in-out);
+}
+
+.section-actions.is-hidden {
+  max-width: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.section-icon-button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.section-icon-button:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.section-icon-button:disabled {
+  cursor: default;
+}
+
+/* 列表底部渐隐（上游的 fade）：24px 渐变覆盖层，滚到底时最后一行淡出，
+   而不是被硬切一刀。只是视觉层，所以关掉指针事件。 */
+.session-list-fade {
+  position: absolute;
+  left: var(--dsh-sidebar-inline-padding);
+  right: var(--dsh-sidebar-inline-padding);
+  bottom: 6px;
+  height: 24px;
+  background: linear-gradient(to bottom, transparent, var(--dsw-specific-sidebar-fill));
+  pointer-events: none;
+}
+
 /* 会话列表。左右负外边距抵消侧栏内边距，让滚动条贴到侧栏边缘（上游 regionArea 的做法）。 */
+/* 会话列表。左右负外边距抵消侧栏内边距，让滚动条贴到侧栏边缘（上游 regionArea 的做法）。
+   scrollbar-gutter: stable 是关键：占位一直留着，滚动条出现/消失时行不会左右跳。
+   padding-bottom 给底部渐隐层留出位置，滚到底时最后一行落在渐变之上。 */
 .session-list {
   flex: 1;
   min-height: 0;              /* flex 子项默认 min-height:auto 会撑破容器 */
@@ -304,7 +473,10 @@
   margin-left: -4px;
   margin-right: calc(-1 * var(--dsh-sidebar-inline-padding));
   padding-left: 4px;
+  padding-right: 0;
+  padding-bottom: 16px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .session-item {

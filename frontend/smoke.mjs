@@ -158,6 +158,33 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
     check("会话行时间带月日",
           /\d{2}-\d{2} \d{2}:\d{2}/.test(metaEl?.textContent || ""),
           `实得 ${JSON.stringify(metaEl?.textContent)}`);
+
+    // 区块头：标签 + 搜索 + 右侧动作
+    check("区块头有「会话」标签",
+          window.document.querySelector(".section-label")?.textContent === "会话");
+    const searchInput = window.document.querySelector(".section-search-input");
+    check("区块头有搜索输入框", !!searchInput);
+
+    // 搜索得**真的过滤**，只断言输入框存在证明不了。
+    // 直接赋 value 不会触发 React 的 onChange —— 它自己有个 value tracker，
+    // 看到值没变就跳过。必须走原生 setter 再派发 input 事件。
+    if (searchInput) {
+      const nativeSetter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype, "value").set;
+      const type = (text) => {
+        nativeSetter.call(searchInput, text);
+        searchInput.dispatchEvent(new window.Event("input", { bubbles: true }));
+      };
+      type("绝对匹配不上的词");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      check("搜不到时列表为空",
+            !(root.textContent || "").includes("侧栏里的会话标题")
+            && (root.textContent || "").includes("没有匹配的会话"));
+      type("侧栏里");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      check("搜得到时列表恢复", (root.textContent || "").includes("侧栏里的会话标题"));
+      type("");
+    }
   }
 
   // 点一下开关：没锁的话应该把新状态 PATCH 回这场对话；锁了就不该发生任何写回。
