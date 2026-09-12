@@ -58,11 +58,23 @@ TOOL_SYSTEM_PROMPT = (
 )
 
 from chat_agent import create_client, get_model_temperature, list_providers
-from chat_agent.agent import run_agent_turn, session_store, workspace_store
+from chat_agent.agent import (
+    make_executor,
+    run_agent_turn,
+    session_store,
+    workspace_store,
+)
 
-# 启动时把默认工作区登记进登记表（幂等）。放在 import 之后 ——
-# 这个调用依赖 workspace_store，放在常量区会 NameError。
-workspace_store.ensure(WORKSPACE_DIR, DEFAULT_WORKSPACE_ROOT)
+# 启动时**只在登记表还空着**（第一次跑、或文件被清掉）时把默认工作区登记进去。
+#
+# 以前这里是无条件 ensure —— 效果是"你删掉的工作区，重启服务就回来了"：ensure 见
+# 根路径不在表里就追加一条，而默认根就是服务进程的 cwd。删了一个自己不需要的
+# 工作区，下次重启它又在那儿，而且没有任何提示。（这个坑是用户报的：他只想留
+# workplace，删掉 chat 之后一重启 chat 又出现了。）
+#
+# 现在只在空表时兜底：登记表是用户的意图，服务不该替他往回加。
+if not workspace_store.load(WORKSPACE_DIR):
+    workspace_store.ensure(WORKSPACE_DIR, DEFAULT_WORKSPACE_ROOT)
 
 
 def migrate_legacy_workspace_field() -> int:
@@ -297,6 +309,7 @@ def effective_system_prompt(
 def request_real_reply(
     payload: ChatRequest,
     prior_messages: list[ChatMessage],
+    workspace_root: str | None = None,
     ) -> "TurnResult":
     ensure_runtime_env(payload.provider)
     temperature = payload.temperature
@@ -319,8 +332,15 @@ def request_real_reply(
         tools_enabled=payload.tools_enabled,
     )
     if payload.tools_enabled:
-        # agent 模式：多轮工具调用，直到模型直接回答
-        reply, steps, protocol_messages = run_agent_turn(client, normalized_messages)
+        # agent 模式：多轮工具调用，直到模型直接回答。
+        # 工具在**这场会话所属工作区的根**里干活 —— 相对路径按它解析、bash 在它里面跑。
+        # 这就是"切工作区"的实际含义：不传 root 的话四个工具都按服务进程的 cwd 走，
+        # 界面上选哪个工作区都一样（那正是以前的 bug）。
+        reply, steps, protocol_messages = run_agent_turn(
+            client,
+            normalized_messages,
+            execute_tool=make_executor(workspace_root),
+        )
     else:
         assistant_message, _ = client.request_assistant_message(
             messages=normalized_messages,
@@ -642,6 +662,9 @@ def chat(
     bound_workspace_id = session_store.load_workspace_id(SESSION_DIR, session_id)
     if bound_workspace_id is None:
         bound_workspace_id = resolve_workspace(payload.workspaceId)["id"]
+    # 工具干活的地方 = 这个工作区的根。工作区被删过（或 id 失效）时 resolve_workspace
+    # 会回落到默认那个，不报错 —— 一场指向已删工作区的会话，还能继续用，落在默认根里。
+    workspace_root = resolve_workspace(bound_workspace_id).get("root")
 
     # 历史从会话日志重放 —— 客户端只发本轮新增，服务端不信任它带的历史。
     prior_messages = [
@@ -649,7 +672,7 @@ def chat(
     ]
 
     try:
-        result = request_real_reply(payload, prior_messages)
+        result = request_real_reply(payload, prior_messages, workspace_root)
     except Exception as exc:
         # 失败时**不往历史里写 user 消息**：那条提问没有对应的回答，留在历史里
         # 会让重试把同一句话追加第二遍。失败只记在 turn 记录里（turn 不是历史类型，

@@ -2,19 +2,21 @@
 
     run_agent_turn  多轮循环：模型想用工具 → 执行 → 回喂 → 直到直接说话
     TOOL_SCHEMAS    工具清单（发给模型的说明书）
-    execute_tool    工具分发（工具名 + 参数 JSON 字符串 → 结果文本）
+    execute_tool    工具分发（工具名 + 参数 JSON 字符串 + root → 结果文本）
+    make_executor   把 root 绑进一个执行回调，交给 run_agent_turn
     session_store   会话日志：一个会话一个 append-only JSONL，历史用重放得到
     workspace_store 工作区登记表：agent 被允许活动的目录（将来沙箱的边界）
 """
 
 from chat_agent.agent import session_store, workspace_store
 from chat_agent.agent.loop import run_agent_turn
-from chat_agent.agent.tools import TOOL_SCHEMAS, execute_tool
+from chat_agent.agent.tools import TOOL_SCHEMAS, execute_tool, make_executor
 
 __all__ = [
     "run_agent_turn",
     "TOOL_SCHEMAS",
     "execute_tool",
+    "make_executor",
     "session_store",
     "workspace_store",
 ]

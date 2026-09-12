@@ -33,7 +33,8 @@ def run_agent_turn(
     client: chat_agent 的 Client 实例（提供 request_assistant_message）。
     messages: 完整的对话消息（第一条通常是 system，由调用方拼好）。
     tool_schemas: 工具说明书列表；None → 用 tools.TOOL_SCHEMAS。
-    execute_tool: 执行回调；None → 用 tools.execute_tool。
+    execute_tool: 执行回调；None → tools.make_executor(None)，即在**进程当前目录**
+        里操作（只在随手调时用；服务端必须传绑好工作区根的 executor）。
     max_rounds: 工具调用轮数上限，防模型无限循环。
 
     返回 (最终文本, steps, protocol_messages)：
@@ -51,7 +52,9 @@ def run_agent_turn(
     if tool_schemas is None:
         tool_schemas = _tools.TOOL_SCHEMAS
     if execute_tool is None:
-        execute_tool = _tools.execute_tool
+        # 兜底：在进程当前目录里干活。服务端和评估都该显式传一个绑好 root 的
+        # executor（tools.make_executor）—— 走这条就等于"没有工作区"。
+        execute_tool = _tools.make_executor(None)
 
     history = list(messages)      # 局部历史：无状态，请求结束即丢
     steps: list[dict[str, Any]] = []

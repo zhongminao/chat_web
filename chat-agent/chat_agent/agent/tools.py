@@ -20,6 +20,40 @@ READ_LINE_LIMIT = 200
 READ_LINE_HEAD = 130
 READ_LINE_TAIL = 70
 
+
+# ---------------------------------------------------------------------------
+# 基准目录（root）
+# --------------------------------------------------------------------------
+# 四个工具都在某个目录里干活，这个目录由**调用方显式给**，不从环境里猜：
+#   - 服务端给的是这场会话所属工作区的根 —— 界面上选哪个工作区，agent 就在哪干活；
+#   - 评估时给的是一个临时目录 —— 一个 case 一个目录，互不污染、跑完就删；
+#   - None 才回落到进程当前目录（只在随手调工具时用）。
+#
+# 以前这里全是隐式的：run_bash 不给 cwd、文件路径按进程 cwd 解析。后果是
+# 工作区在界面上能选、能分组，但 agent **始终在服务进程的目录里操作** ——
+# 选了等于没选，而且没有任何地方会报错。
+#
+# 注意这**不是沙箱**：绝对路径照用，`../` 也可能走出 root。这里只决定"基准在哪"，
+# 拦住越界是沙箱那一步（要判断目标在不在某个工作区根下面）。
+# ---------------------------------------------------------------------------
+def root_dir(root: "str | Path | None") -> Path:
+    """把 root 规范成绝对目录；None = 进程当前目录。"""
+    if root is None:
+        return Path.cwd()
+    return Path(root).expanduser().resolve()
+
+
+def resolve_path(path: "str | Path", root: "str | Path | None") -> Path:
+    """相对路径按 root 解析，绝对路径原样。返回规范化的绝对路径。
+
+    规范化是必须的，不只是好看：observed 守卫按路径记"读过没读过"，`a.txt` 和
+    `/root/a.txt` 必须是同一个 key —— 否则模型换个写法就能绕过"先读后改"。
+    """
+    target = Path(path).expanduser()
+    if not target.is_absolute():
+        target = root_dir(root) / target
+    return target.resolve()
+
 READ_FILE_SCHEMA = {
     "type": "function",
     "function": {
@@ -168,57 +202,59 @@ def _elide_line(line:str)->str:
     )
 
 
-def read_file(path:str,offset=1,limit=500)->str:
+def read_file(path:str,offset=1,limit=500,*,root=None)->str:
+    target = resolve_path(path, root)
     if offset < 1:
         offset = 1
     if limit <= 0:
         limit = 500
     try:
-        with open(path,"r",encoding="utf-8") as f:
+        with open(target,"r",encoding="utf-8") as f:
             content = f.read()
     except Exception as exc:
-        raise ValueError(f"read {path} failed, error:{exc}")
+        raise ValueError(f"read {target} failed, error:{exc}")
 
     lines = content.splitlines()
     total = len(lines)
 
     if total == 0:
-        return f"[read_file] {path}: empty file (0 lines)"
+        return f"[read_file] {target}: empty file (0 lines)"
 
     if offset > total:
-        raise ValueError(f"offset={offset} is beyond end of file ({total} lines total): {path}")
+        raise ValueError(f"offset={offset} is beyond end of file ({total} lines total): {target}")
 
     start = offset - 1
     chunk = lines[start:start+limit]
     end = start + len(chunk)
     body = "\n".join(_elide_line(line) for line in chunk)
-    remember_observed(path, lines=total)
-    result = f"[read_file] {path} ({total} lines total, showing lines {start + 1}-{end})\n{body}"
+    remember_observed(target, lines=total)
+    result = f"[read_file] {target} ({total} lines total, showing lines {start + 1}-{end})\n{body}"
     if end < total:
         result += f"\n...[{total - end} more lines in file. Use offset={end + 1} to continue.]"
     return result
 
-def edit_file(path:str,old_text:str,new_text:str)->str:
-    reason = guard_mutation(path)
+def edit_file(path:str,old_text:str,new_text:str,*,root=None)->str:
+    target = resolve_path(path, root)
+    reason = guard_mutation(target)
     if reason:
-        raise ValueError(f"cannot edit {path}: {reason}")
+        raise ValueError(f"cannot edit {target}: {reason}")
     try:
-        with open(path,"r",encoding="utf-8") as f:
+        with open(target,"r",encoding="utf-8") as f:
             content = f.read()
     except FileNotFoundError:
-        raise ValueError(f"File {path} Not Found")
+        raise ValueError(f"File {target} Not Found")
     except UnicodeDecodeError:
-        raise ValueError(f"File {path} decoding with utf-8 failed")
+        raise ValueError(f"File {target} decoding with utf-8 failed")
     count = content.count(old_text)
     if count == 0:
-        raise ValueError(f"old_text not found in {path}. Read the file first and copy the exact text.")
+        raise ValueError(f"old_text not found in {target}. Read the file first and copy the exact text.")
     if count > 1:
-        raise ValueError(f"old_text appears {count} times in {path}. Add surrounding context to make it unique.")
+        raise ValueError(f"old_text appears {count} times in {target}. Add surrounding context to make it unique.")
     updated = content.replace(old_text,new_text,1)
-    with open(path,"w",encoding="utf-8") as f:
+    with open(target,"w",encoding="utf-8") as f:
         f.write(updated)
-    remember_observed(path, lines=len(updated.splitlines()))
-    return f"[edit_file] '{old_text}' replaced with '{new_text}' in {path}"
+    remember_observed(target, lines=len(updated.splitlines()))
+    return f"[edit_file] '{old_text}' replaced with '{new_text}' in {target}"
 
 def _elide_middle(text:str,limit:int=BASH_OUTPUT_LIMIT)->str:
     """超长输出掐中间、留头尾。
@@ -235,7 +271,8 @@ def _elide_middle(text:str,limit:int=BASH_OUTPUT_LIMIT)->str:
     )
 
 
-def run_bash(command:str,timeout:int=60)->str:
+def run_bash(command:str,timeout:int=60,*,root=None)->str:
+    cwd = root_dir(root)
     try:
         result = subprocess.run(
             command,
@@ -246,9 +283,14 @@ def run_bash(command:str,timeout:int=60)->str:
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
+            cwd=str(cwd),
         )
     except subprocess.TimeoutExpired:
         return f"$ {command}\n[timed out after {timeout}s]"
+    except OSError as exc:
+        # 工作目录没了（比如工作区目录被人在磁盘上删了）——说清是目录的问题，
+        # 别说成命令的问题，否则模型会去改命令然后一直失败。
+        return f"$ {command}\n[cannot run in {cwd}: {exc}]"
 
     text = (result.stdout or "") + (result.stderr or "")
     hint = ""
@@ -267,18 +309,18 @@ def run_bash(command:str,timeout:int=60)->str:
         text = preview
     return f"$ {command}\n{text}[exit code: {result.returncode}]{hint}"
 
-def write_file(path:str,content:str)->str:
-    reason = guard_mutation(path)
+def write_file(path:str,content:str,*,root=None)->str:
+    p = resolve_path(path, root)
+    reason = guard_mutation(p)
     if reason:
-        raise ValueError(f"cannot write {path}: {reason}")
-    p = Path(path)
+        raise ValueError(f"cannot write {p}: {reason}")
     p.parent.mkdir(parents = True,exist_ok=True)
     try:
         with open(p,"w",encoding="utf-8") as f:
             f.write(content)
     except OSError as exc:
         raise ValueError(f"write {p} failed: {exc}")
-    remember_observed(path, lines=len(content.splitlines()))
+    remember_observed(p, lines=len(content.splitlines()))
     return f"[write_file] {p} written"
 
 # ---------------------------------------------------------------------------
@@ -296,17 +338,26 @@ _TOOL_FUNCS = {
 # 这些数值参数，小模型经常传成字符串（"10" 而不是 10），分发时统一转 int
 _NUMERIC_FIELDS = {"offset", "limit", "timeout"}
 
+# 由**调用方**注入、不许模型自己给的参数。
+#
+# 分发时是按函数签名过滤模型给的 JSON 的（挡掉 schema 外的多余字段）。root 也在签名里，
+# 不排除掉的话模型塞一个 "root": "/" 就能把它自己的基准目录改掉 —— 基准目录必须
+# 由宿主决定，这条不能交给模型。以后再有这类参数，加进这个集合。
+_INJECTED_ARGS = {"root"}
+
 # 工具失败的统一前缀。这是 tools.py 与 loop.py 之间的**契约**：
 # execute_tool 从不抛异常，所以 loop.py 判断不了成功与否，只能认这个前缀。
 # 抽成常量是为了别让两处各写一遍字符串 —— 格式一改，ok 字段会静默失效。
 TOOL_ERROR_PREFIX = "[tool error] "
 
 
-def execute_tool(name: str, arguments_raw: str) -> str:
+def execute_tool(name: str, arguments_raw: str, *, root: "str | Path | None" = None) -> str:
     """执行一次工具调用，任何情况都返回文本，绝不抛异常。
 
     name: 工具名（模型给的 function.name）。
     arguments_raw: 模型给的参数，JSON 字符串（可能不合法，小模型常犯）。
+    root: 基准目录 —— 相对路径按它解析、run_bash 在它里面执行。None 才是进程当前
+          目录；服务端必须传工作区的根（见 root_dir 那段注释）。
 
     成功 → 执行函数自己的输出文本；
     失败 → TOOL_ERROR_PREFIX 开头的错误文本。错误会回喂给模型，让它能自救/重试。
@@ -331,7 +382,8 @@ def execute_tool(name: str, arguments_raw: str) -> str:
 
     # 2. 只保留函数签名里有的参数。
     #    模型常塞 schema 外的多余字段，直接 func(**args) 会 TypeError。
-    valid_names = set(inspect.signature(func).parameters)
+    #    签名里但属于"宿主注入"的（root）也要排掉，见 _INJECTED_ARGS。
+    valid_names = set(inspect.signature(func).parameters) - _INJECTED_ARGS
     args = {key: value for key, value in args.items() if key in valid_names}
 
     # 3. 数值字段若被传成字符串，转成 int（读文件/超时这类参数）
@@ -342,13 +394,24 @@ def execute_tool(name: str, arguments_raw: str) -> str:
 
     # 4. 执行。异常按类型给不同错误文本，模型能看到具体原因
     try:
-        return func(**args)
+        return func(**args, root=root)
     except TypeError as exc:
         return f"{TOOL_ERROR_PREFIX}bad arguments for {name}: {exc}"
     except ValueError as exc:
         return f"{TOOL_ERROR_PREFIX}{exc}"
     except Exception as exc:
         return f"{TOOL_ERROR_PREFIX}{name} crashed: {exc}"
+
+
+def make_executor(root: "str | Path | None"):
+    """把 root 绑进一个 (name, arguments_raw) -> str 的回调，交给 run_agent_turn。
+
+    loop 只管"调模型、跑工具、回喂"，不该知道文件系统的基准在哪；基准由调用方在这里绑好。
+    服务端绑工作区的根，评估绑临时目录。
+    """
+    def _executor(name: str, arguments_raw: str) -> str:
+        return execute_tool(name, arguments_raw, root=root)
+    return _executor
 
 TOOL_SCHEMAS = [
     READ_FILE_SCHEMA,
