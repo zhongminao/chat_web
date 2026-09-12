@@ -1,7 +1,7 @@
 # chat
 
-React + FastAPI 的 AI 聊天应用。后端 `app.py` 经 chat-agent 调 LLM；前端是浏览器里直接跑的
-React（无构建、无 Node —— JSX 由网页里的 Babel 现场编译，代价是首屏约 3MB）。
+React + FastAPI 的 AI 聊天应用。后端 `app.py` 经 chat-agent 调 LLM；前端源码在
+`frontend/`，由 esbuild 打包成 `static/app.js`（约 150KB），本目录的 FastAPI 直接发。
 
 ```bash
 pip install -e ~/mydisk/tools/chat

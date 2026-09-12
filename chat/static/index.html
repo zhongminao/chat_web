@@ -13,6 +13,9 @@
                     一律引用上面那张表里的变量名。
     调换顺序的话，styles.css 读到的变量会解析不出来，页面会退化成
     「有布局、没颜色」的样子。
+
+    样式**刻意不参与构建**：保持两个 <link> 原样，theme.css「逐字拷贝、升级时
+    整份覆盖」的性质才不会被内联破坏。
   -->
   <link rel="stylesheet" href="/static/theme.css" />
   <link rel="stylesheet" href="/static/styles.css" />
@@ -21,15 +24,22 @@
   <div id="root"></div>
   <!--React 做的事情叫做程序化渲染：它用 JavaScript 完全接管了 #root 这个 DOM 节点。此后，
   页面上的所有元素（按钮、列表、弹窗）都由 React 在内存中计算好，再通过 ReactDOM 映射到真实 DOM 上-->
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script type="text/babel" src="/static/main.jsx"></script>
-  <!--  
-  前两行从 CDN 加载 React，挂成全局变量 React 和 ReactDOM（所以 main.jsx 第一行能直接用 React，不需要 import）。
-  第三行加载 Babel。
-  第四行的 type="text/babel" 是关键——浏览器不认识 .jsx 里那种"HTML 混在 JS 里"的写法，所以由 Babel 在浏览器里当场翻译成普通 JS 再执行。
+  <script src="/static/app.js"></script>
+  <!--
+  这里以前是 4 个 <script>：React / ReactDOM / Babel 都从 unpkg CDN 现拉，
+  再靠 type="text/babel" 让 Babel 在浏览器里当场把 main.jsx 翻译成普通 JS。
+  三个代价：浏览器必须能上外网、首屏要下约 3MB、每次刷新都重新编译一遍。
+
+  现在是一个本地 bundle：源码在 frontend/src/，esbuild 把 React 和 main.jsx 一起
+  打包成 chat/static/app.js，仍由 FastAPI 直接发。约 150KB，也不再依赖外网。
+
+  改完前端要重新构建：
+      cd frontend && pnpm install    # 首次
+      pnpm run build                 # 产出 chat/static/app.js
+      pnpm run watch                 # 开发时挂着，改完自动重建
+
+  产物 app.js 是**提交进仓库**的：不改前端的人 clone 下来直接能跑，机器上不需要 Node。
+  Node 只在构建时需要 —— 服务运行时依然只跑 Python。
   -->
 </body>
 </html>
-

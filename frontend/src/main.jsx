@@ -1,3 +1,10 @@
+/* 这两行是加了构建之后唯一的改动：以前 React / ReactDOM 是 index.html 里
+   <script> 从 CDN 拉进来的全局变量，现在由 esbuild 从 npm 装好、打进 bundle。
+   用的是命名空间导入，所以下面 `React.xxx` / `ReactDOM.xxx` 的写法**一个字都不用改**，
+   原本的教学备注也照旧成立。 */
+import React from "react";
+import * as ReactDOM from "react-dom/client";
+
 const { useState, useEffect, useRef } = React;
 /* 从对象里把几个属性拎出来变成独立变量 等价于
   const useState = React.useState;

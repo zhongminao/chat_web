@@ -10,15 +10,33 @@ tools/chat/
 ├── chat/
 │   ├── __main__.py         # 启动入口（python -m chat）
 │   ├── app.py              # FastAPI 后端
-│   └── static/             # React 前端（index.html / main.jsx / styles.css）
+│   └── static/             # 前端**产物**与样式（app.js / index.html / styles.css / theme/）
+├── frontend/               # 前端源码（esbuild 构建，产物写到 chat/static/app.js）
+│   ├── package.json
+│   ├── smoke.mjs           # UI 冒烟测试（jsdom 里真跑一遍产物）
+│   └── src/main.jsx
 ├── chat-agent/             # 独立可安装的 LLM 客户端库（零项目依赖，仅 openai+pyyaml）
 │   ├── pyproject.toml
 │   └── chat_agent/
 │       ├── openai_client.py    # Client + ConversationSession
 │       ├── providers.yaml      # 供应商目录
 │       └── agent/              # agent 循环 + 四个工具（路线图见该包 README）
+├── traces/                 # 轨迹（不进 git）
+├── sessions/               # 会话日志（不进 git）
 └── start_local_qwen.sh     # 本地 Qwen3.5-2B vLLM 服务
 ```
+
+## 前端构建
+
+```bash
+cd frontend && pnpm install      # 首次
+pnpm run build                   # 产出 chat/static/app.js（约 150KB）
+pnpm run watch                   # 开发时挂着，改完自动重建
+pnpm run smoke                   # 只跑 UI 冒烟测试
+```
+
+**产物是提交进仓库的**，所以不改前端的人 clone 下来直接能跑，机器上不需要 Node。
+Node 只在构建时需要；服务运行时只跑 Python。
 
 > ⚠️ **项目目录叫 `chat-agent`（连字符），不要改成 `chat_agent`。** 目录名若与包名
 > 相同，仓库根就成了 `sys.path[0]` 上的同名**命名空间包**，会把真包遮蔽掉 ——

@@ -12,6 +12,9 @@ dist/
 .vscode/
 .idea/
 
+# 前端依赖（产物 chat/static/app.js 是提交的，依赖不是）
+node_modules/
+
 # 日志与临时文件
 *.log
 *.tmp

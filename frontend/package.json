@@ -1,0 +1,19 @@
+{
+  "name": "chat-frontend",
+  "private": true,
+  "description": "chat 的前端源码与构建。产物是一个静态 bundle，由 FastAPI 直接发 —— 运行时不需要 Node。",
+  "scripts": {
+    "build": "esbuild src/main.jsx --bundle --minify --format=iife --target=es2020 --charset=utf8 --define:process.env.NODE_ENV='\"production\"' --outfile=../chat/static/app.js",
+    "watch": "esbuild src/main.jsx --bundle --format=iife --target=es2020 --charset=utf8 --define:process.env.NODE_ENV='\"development\"' --outfile=../chat/static/app.js --watch",
+    "smoke": "node smoke.mjs",
+    "check": "pnpm run build && pnpm run smoke"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "jsdom": "^30.0.1"
+  }
+}
