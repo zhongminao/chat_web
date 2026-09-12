@@ -3,6 +3,14 @@ import json
 import subprocess
 from pathlib import Path
 
+from llm_client.agent.spill import save as save_spill
+
+# bash 输出的内联上限。超过就掐中间留头尾，全文另存（见 _elide_middle / run_bash）。
+# 放在 schema 之前，是因为 RUN_BASH_SCHEMA 的描述由这三个值生成 —— 写死数字会漂移。
+OUTPUT_LIMIT = 500
+OUTPUT_HEAD = 200
+OUTPUT_TAIL = 300
+
 READ_FILE_SCHEMA = {
     "type": "function",
     "function": {
@@ -74,10 +82,13 @@ RUN_BASH_SCHEMA = {
         "description": (
             "Run a bash command and return combined stdout/stderr. "
             "Use for listing files, searching (grep), git, or running programs. "
-            "Long output is elided in the middle — the first 6000 and the last "
-            "14000 chars survive, with a marker saying how many were dropped, so "
-            "both the beginning and the exit code stay visible. A command killed "
-            "by timeout or a non-zero exit code is reported in the output."
+            f"Output longer than {OUTPUT_LIMIT} chars is elided in the middle — the "
+            f"first {OUTPUT_HEAD} and the last {OUTPUT_TAIL} chars survive — but it is "
+            "never lost: the full text is saved to a file whose path is reported at "
+            "the end of the result. When you need what was elided, read that file "
+            "with read_file (page it with offset/limit) or search it with run_bash "
+            "grep. A command killed by timeout or a non-zero exit code is reported "
+            "in the output."
         ),
         "parameters": {
             "type": "object",
@@ -171,11 +182,6 @@ def edit_file(path:str,old_text:str,new_text:str)->str:
         f.write(updated)
     return f"[edit_file] '{old_text}' replaced with '{new_text}' in {path}"
 
-OUTPUT_LIMIT = 20000
-OUTPUT_HEAD = 6000
-OUTPUT_TAIL = 14000
-
-
 def _elide_middle(text:str,limit:int=OUTPUT_LIMIT)->str:
     """超长输出掐中间、留头尾。
 
@@ -205,8 +211,21 @@ def run_bash(command:str,timeout:int=60)->str:
         )
     except subprocess.TimeoutExpired:
         return f"$ {command}\n[timed out after {timeout}s]"
-    output = _elide_middle((result.stdout or "") + (result.stderr or ""))
-    return f"$ {command}\n{output}[exit code: {result.returncode}]"
+
+    text = (result.stdout or "") + (result.stderr or "")
+    hint = ""
+    if len(text) > OUTPUT_LIMIT:
+        preview = _elide_middle(text)
+        # 只截断会让被掐掉的那段永远拿不回来（重跑还是被截，用 sed 又不知道该看哪几行），
+        # 所以全文另存一份，内联换成"预览 + 定位符"，取回走 read_file 的分页。
+        path = save_spill(text, source="run_bash")
+        if path is not None:
+            hint = (
+                f"\n[full output: {len(text)} chars saved to {path} — the middle above was "
+                f"elided. Read it with read_file(offset=..., limit=...), or run_bash grep on it.]"
+            )
+        text = preview
+    return f"$ {command}\n{text}[exit code: {result.returncode}]{hint}"
 
 def write_file(path:str,content:str)->str:
     p = Path(path)
