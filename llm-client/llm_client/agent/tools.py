@@ -5,11 +5,18 @@ from pathlib import Path
 
 from llm_client.agent.spill import save as save_spill
 
-# bash 输出的内联上限。超过就掐中间留头尾，全文另存（见 _elide_middle / run_bash）。
-# 放在 schema 之前，是因为 RUN_BASH_SCHEMA 的描述由这三个值生成 —— 写死数字会漂移。
-OUTPUT_LIMIT = 500
-OUTPUT_HEAD = 200
-OUTPUT_TAIL = 300
+# 工具输出的内联上限。bash 按整体掐（超长另存 spill 文件）；read_file 按行分页，
+# 单行过长则原地截断。
+#
+# 数值随时可调，所以**任何地方都不要写具体数字** —— 包括 schema 描述和注释。
+# 描述只讲行为（"超长会截断"），不讲阈值，改了值不会有东西过期。
+BASH_OUTPUT_LIMIT = 500
+BASH_OUTPUT_HEAD = 200
+BASH_OUTPUT_TAIL = 300
+
+READ_LINE_LIMIT = 200
+READ_LINE_HEAD = 130
+READ_LINE_TAIL = 70
 
 READ_FILE_SCHEMA = {
     "type": "function",
@@ -21,7 +28,10 @@ READ_FILE_SCHEMA = {
             "The output starts with the file path, total line count, and the "
             "line range returned. Large files are read page by page: when more "
             "lines remain, the output ends with a hint telling you the next "
-            "offset to continue from."
+            "offset to continue from. An extremely long line is shortened in "
+            "place, keeping its beginning and end with a marker for what was "
+            "cut — if you need such a line verbatim (for edit_file), fetch it "
+            "with run_bash instead, e.g. sed a line range."
         ),
         "parameters": {
             "type": "object",
@@ -32,11 +42,11 @@ READ_FILE_SCHEMA = {
                 },
                 "offset": {
                     "type": "integer",
-                    "description": "1-based line number to start reading from (default 1).",
+                    "description": "1-based line number to start reading from.",
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Max lines to read (default 500).",
+                    "description": "How many lines to read.",
                 },
             },
             "required": ["path"],
@@ -82,13 +92,11 @@ RUN_BASH_SCHEMA = {
         "description": (
             "Run a bash command and return combined stdout/stderr. "
             "Use for listing files, searching (grep), git, or running programs. "
-            f"Output longer than {OUTPUT_LIMIT} chars is elided in the middle — the "
-            f"first {OUTPUT_HEAD} and the last {OUTPUT_TAIL} chars survive — but it is "
-            "never lost: the full text is saved to a file whose path is reported at "
-            "the end of the result. When you need what was elided, read that file "
-            "with read_file (page it with offset/limit) or search it with run_bash "
-            "grep. A command killed by timeout or a non-zero exit code is reported "
-            "in the output."
+            "Output that is too long is elided in the middle — you get the "
+            "beginning and the end — but it is never lost: the full text is saved "
+            "to a file whose path is reported at the end of the result. When you "
+            "need what was elided, grep or sed that file with run_bash. A command "
+            "killed by timeout or a non-zero exit code is reported in the output."
         ),
         "parameters": {
             "type": "object",
@@ -99,7 +107,7 @@ RUN_BASH_SCHEMA = {
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Timeout in seconds (default 60).",
+                    "description": "Timeout in seconds.",
                 },
             },
             "required": ["command"],
@@ -134,6 +142,24 @@ WRITE_FILE_SCHEMA = {
     },
 }
 
+def _elide_line(line:str)->str:
+    """单行过长就地截断，留头也留尾。
+
+    必须head+tail，不能只留头：`import {a, b} from "x"` 的模块名、SQL 的 FROM
+    表名、日志行的报错都落在行尾，只留头会把最该看的部分切掉。
+
+    刻意不含换行 —— 一旦插了换行，行号就会错位，offset/limit 分页随之失效。
+    """
+    if len(line) <= READ_LINE_LIMIT:
+        return line
+    omitted = len(line) - READ_LINE_HEAD - READ_LINE_TAIL
+    return (
+        line[:READ_LINE_HEAD]
+        + f"...[{omitted} chars cut]..."
+        + line[-READ_LINE_TAIL:]
+    )
+
+
 def read_file(path:str,offset=1,limit=500)->str:
     if offset < 1:
         offset = 1
@@ -144,21 +170,20 @@ def read_file(path:str,offset=1,limit=500)->str:
             content = f.read()
     except Exception as exc:
         raise ValueError(f"read {path} failed, error:{exc}")
+
     lines = content.splitlines()
     total = len(lines)
 
     if total == 0:
-        # 空文件：没有"第几行到第几行"可言，单独表述
         return f"[read_file] {path}: empty file (0 lines)"
 
     if offset > total:
-        # offset 超出文件末尾：切片会得到空段，行号区间会变成"第 N-(N-1) 行"的胡话
         raise ValueError(f"offset={offset} is beyond end of file ({total} lines total): {path}")
 
     start = offset - 1
     chunk = lines[start:start+limit]
     end = start + len(chunk)
-    body = "\n".join(chunk)
+    body = "\n".join(_elide_line(line) for line in chunk)
     result = f"[read_file] {path} ({total} lines total, showing lines {start + 1}-{end})\n{body}"
     if end < total:
         result += f"\n...[{total - end} more lines in file. Use offset={end + 1} to continue.]"
@@ -182,18 +207,18 @@ def edit_file(path:str,old_text:str,new_text:str)->str:
         f.write(updated)
     return f"[edit_file] '{old_text}' replaced with '{new_text}' in {path}"
 
-def _elide_middle(text:str,limit:int=OUTPUT_LIMIT)->str:
+def _elide_middle(text:str,limit:int=BASH_OUTPUT_LIMIT)->str:
     """超长输出掐中间、留头尾。
 
     留尾是关键：退出码、报错、堆栈都在末尾，只留头会丢掉最该看的信息。
     """
     if len(text) <= limit:
         return text
-    omitted = len(text) - OUTPUT_HEAD - OUTPUT_TAIL
+    omitted = len(text) - BASH_OUTPUT_HEAD - BASH_OUTPUT_TAIL
     return (
-        text[:OUTPUT_HEAD]
+        text[:BASH_OUTPUT_HEAD]
         + f"\n...[{omitted} chars omitted]...\n"
-        + text[-OUTPUT_TAIL:]
+        + text[-BASH_OUTPUT_TAIL:]
     )
 
 
@@ -214,15 +239,17 @@ def run_bash(command:str,timeout:int=60)->str:
 
     text = (result.stdout or "") + (result.stderr or "")
     hint = ""
-    if len(text) > OUTPUT_LIMIT:
+    if len(text) > BASH_OUTPUT_LIMIT:
         preview = _elide_middle(text)
         # 只截断会让被掐掉的那段永远拿不回来（重跑还是被截，用 sed 又不知道该看哪几行），
-        # 所以全文另存一份，内联换成"预览 + 定位符"，取回走 read_file 的分页。
+        # 所以全文另存一份，内联换成"预览 + 定位符"。取回靠 run_bash 自己 grep/sed
+        # 那个路径 —— 不必新工具，read_file 也不再分页。
         path = save_spill(text, source="run_bash")
         if path is not None:
             hint = (
                 f"\n[full output: {len(text)} chars saved to {path} — the middle above was "
-                f"elided. Read it with read_file(offset=..., limit=...), or run_bash grep on it.]"
+                f"elided. Read it with read_file (page it with offset/limit), or grep/sed "
+                f"it with run_bash.]"
             )
         text = preview
     return f"$ {command}\n{text}[exit code: {result.returncode}]{hint}"
