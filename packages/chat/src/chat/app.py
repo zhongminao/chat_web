@@ -67,7 +67,12 @@ TOOL_SYSTEM_PROMPT = (
     "edited, or ran."
 )
 
-from chat import create_client, get_model_temperature, list_providers
+from chat import (
+    create_client,
+    get_model_temperature,
+    list_providers,
+    load_provider_catalog,
+)
 from chat.agent import (
     make_executor,
     run_agent_turn,
@@ -227,18 +232,23 @@ def load_env_value_from_bashrc(
 def ensure_runtime_env(
     provider: str,
     ) -> None:
-    normalized_provider = provider.strip().lower()
+    """把这个供应商的 API key 从 ~/.bashrc 读进 os.environ。
 
-    if normalized_provider == "gpt":
-        load_env_value_from_bashrc("GPT_API_KEY")
-        return
+    **"哪个 provider 用哪个环境变量"的唯一来源是 `providers.yaml` 的 `api_key_env`。**
 
-    if normalized_provider == "deepseek":
-        load_env_value_from_bashrc("DEEPSEEK_API_KEY")
-        return
+    这里以前是一串硬编码的 if（gpt → GPT_API_KEY，deepseek → …），等于同一件事在
+    yaml 和代码里各写一份。两份必须保持一致，但不一致时**不会报错** —— 只会静默读不到
+    key，最后以一个 401 收场。现在只剩 yaml 一份：加供应商、改变量名都只动那个文件。
 
-    if normalized_provider == "local_qwen":
-        load_env_value_from_bashrc("LOCAL_QWEN_API_KEY")
+    provider 不认识时**不在这里报错**，直接返回：这个函数的职责只是填环境变量，
+    "不支持的供应商"该由 create_client 去说（错误信息与时机都保持原样）。
+
+    注意读的是**文件**而不是继承环境：服务由 systemd 启动，继承不到终端的 shell 环境。
+    """
+    entry = load_provider_catalog().get(str(provider).strip().lower()) or {}
+    key_name = entry.get("api_key_env")
+    if key_name:
+        load_env_value_from_bashrc(key_name)
 
 
 def normalize_messages(
