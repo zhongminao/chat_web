@@ -2,10 +2,13 @@ import React, { useEffect, useState } from "react";
 
 import { fetchProviders, fetchSessionItems, fetchSessions, sendChat } from "./api";
 import { newSessionId, readStoredSessionId, writeStoredSessionId } from "./session";
+import { readStored, writeStored } from "./storage";
 import Composer from "./components/Composer";
 import MessageList from "./components/MessageList";
 import SessionSidebar from "./components/SessionSidebar";
 import SystemPanel from "./components/SystemPanel";
+
+const SIDEBAR_KEY = "chat.sidebarCollapsed";
 
 function createId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -54,6 +57,17 @@ export default function App() {
   const [toolSystemPrompt, setToolSystemPrompt] = useState("");
   const [baseSnapshot, setBaseSnapshot] = useState("");
   const [temperature, setTemperature] = useState(null);
+  // 侧栏收起状态存 localStorage —— 这是个界面偏好，刷新后不该跳回去。
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => readStored(SIDEBAR_KEY) === "1"
+  );
+
+  function toggleSidebar() {
+    setSidebarCollapsed((collapsed) => {
+      writeStored(SIDEBAR_KEY, collapsed ? "0" : "1");
+      return !collapsed;
+    });
+  }
 
   // 侧栏数据。每轮对话结束后要重取一次 —— 标题和轮数都跟着变。
   function refreshSessions() {
@@ -224,13 +238,14 @@ export default function App() {
         workspace={workspace}
         sessions={sessions}
         activeId={sessionId}
+        collapsed={sidebarCollapsed}
+        onToggle={toggleSidebar}
         onSelect={selectSession}
         onNew={clearMessages}
       />
 
       <section className="card">
         <header className="header">
-          <h1>AI 聊天助手</h1>
           <button
             type="button"
             className="secondary-button"

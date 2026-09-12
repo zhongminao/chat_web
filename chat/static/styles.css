@@ -59,11 +59,27 @@
   border-right: 1px solid var(--dsw-alias-border-l1);
 }
 
-.sidebar-workspace {
+/* 收起后缩成一条窄条，宽度取上游的 SIDEBAR_COLLAPSED —— 收起不等于消失，
+   展开按钮留在原地，不用去别处找入口。 */
+.sidebar.is-collapsed {
+  width: 56px;
+  align-items: center;
+  padding: 12px 6px;
+}
+
+.sidebar-head {
   flex: none;
   display: flex;
   align-items: center;
+  gap: 4px;
   height: 44px;
+}
+
+.sidebar-workspace {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
   padding: 0 10px;
   font-size: 14px;
   font-weight: 600;
@@ -75,6 +91,26 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sidebar-toggle {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-caption);
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sidebar-toggle:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
 }
 
 .new-session-button {
@@ -177,21 +213,11 @@
   display: flex;
   flex-wrap: wrap;            /* 窄屏（手机）时控件自动换行，不会横向溢出 */
   align-items: center;
+  justify-content: flex-end;  /* 标题拿掉之后靠这个把控件推到右侧 */
   gap: 4px;
   min-height: 48px;
   padding: 8px 4px;
   border-bottom: 1px solid var(--dsw-alias-border-l1);
-}
-
-.header h1 {
-  /* 上游的会话标题就是 14px（--dsw-font-s-strong-14）；
-     应用标题抬到 15px/600，留一点层级差即可，别做成 44px 那种巨无霸。 */
-  margin: 0 auto 0 0;         /* 右边自适应撑开，把后面的控件推到右侧 */
-  font-size: 15px;
-  font-weight: 600;
-  line-height: 22px;
-  color: var(--dsw-alias-label-primary);
-  white-space: nowrap;
 }
 
 /* ---------------------------------------------------------------------------
@@ -959,11 +985,6 @@
 @media (max-width: 720px) {
   .header {
     gap: 6px;
-  }
-
-  .header h1 {
-    width: 100%;
-    margin-right: 0;
   }
 
   .model-chip {

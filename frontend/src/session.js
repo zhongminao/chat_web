@@ -1,23 +1,15 @@
 // 会话 id 的存放。历史归服务端，前端只记这一个 id。
 
+import { readStored, writeStored } from "./storage";
+
 const SESSION_KEY = "chat.sessionId";
 
-// 存储不可用时（隐私模式 / file:// / 浏览器禁用）访问 localStorage 会抛
-// SecurityError，而这发生在 useState 初始化里 —— 抛出去就是整页空白。
 export function readStoredSessionId() {
-  try {
-    return window.localStorage.getItem(SESSION_KEY);
-  } catch (error) {
-    return null;
-  }
+  return readStored(SESSION_KEY);
 }
 
 export function writeStoredSessionId(value) {
-  try {
-    window.localStorage.setItem(SESSION_KEY, value);
-  } catch (error) {
-    /* 存不下就只活在内存里 */
-  }
+  writeStored(SESSION_KEY, value);
 }
 
 // 前缀 web- 是为了在 storage/sessions/ 里一眼看出是浏览器建的。

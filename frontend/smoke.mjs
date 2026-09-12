@@ -50,7 +50,7 @@ const sessionList = {
 
 let failures = 0;
 
-async function scenario(name, { withUrl = true, seedSession = null, sessionItems = null } = {}) {
+async function scenario(name, { withUrl = true, seedSession = null, sessionItems = null, collapsed = false } = {}) {
   const pageErrors = [];
   const fetchCalls = [];
 
@@ -70,6 +70,9 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
 
   if (seedSession) {
     window.localStorage.setItem("chat.sessionId", seedSession);
+  }
+  if (collapsed) {
+    window.localStorage.setItem("chat.sidebarCollapsed", "1");
   }
 
   window.fetch = (url) => {
@@ -108,22 +111,24 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
   };
 
   check("#root 非空（没白屏）", html2.length > 0, `${html2.length} 字符`);
-  check("标题渲染出来", text.includes("AI 聊天助手"));
   check("输入框存在", !!window.document.querySelector("textarea, input[type=text]"));
   check("请求了供应商目录", fetchCalls.some((u) => u.includes("/api/providers")));
   // 覆盖 providers -> state -> 渲染 这条链：接口回来了要真的显示到 chip 上
   check("模型 chip 显示出接口返回的模型名", text.includes("DeepSeek Flash"));
   check("发送按钮在", !!window.document.querySelector("button[type=submit]"));
-  // 侧栏：两个接口回来之后都要落到界面上。刻意取元素而不是全文 includes ——
-  // "chat" 这种短串用 includes 判可能撞到别处，等于没测。
-  const workspaceEl = window.document.querySelector(".sidebar-workspace-name");
-  const sessionTitleEl = window.document.querySelector(".session-item-title");
-  check("侧栏工作区名 = 路径末端目录",
-        workspaceEl?.textContent === "chat", `实得 ${JSON.stringify(workspaceEl?.textContent)}`);
-  check("侧栏会话标题 = 接口返回的标题",
-        sessionTitleEl?.textContent === "侧栏里的会话标题",
-        `实得 ${JSON.stringify(sessionTitleEl?.textContent)}`);
-  check("新对话按钮在", text.includes("新对话"));
+  // 侧栏内容只在展开时才有 —— 收起场景里断言这些等于自相矛盾，所以按状态分开。
+  // 刻意取元素而不是全文 includes："chat" 这种短串用 includes 判可能撞到别处，等于没测。
+  if (!collapsed) {
+    const workspaceEl = window.document.querySelector(".sidebar-workspace-name");
+    const sessionTitleEl = window.document.querySelector(".session-item-title");
+    check("侧栏工作区名 = 路径末端目录",
+          workspaceEl?.textContent === "chat", `实得 ${JSON.stringify(workspaceEl?.textContent)}`);
+    check("侧栏会话标题 = 接口返回的标题",
+          sessionTitleEl?.textContent === "侧栏里的会话标题",
+          `实得 ${JSON.stringify(sessionTitleEl?.textContent)}`);
+    check("新对话按钮在", text.includes("新对话"));
+  }
+  check("收起/展开按钮在", !!window.document.querySelector(".sidebar-toggle"));
 
   if (pageErrors.length) {
     console.log("  --- 页面报错 ---");
@@ -131,7 +136,7 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
       console.log("    " + line.split("\n")[0].slice(0, 160));
     }
   }
-  return { text, fetchCalls };
+  return { text, html: html2, fetchCalls };
 }
 
 // 场景 1：全新会话
@@ -156,9 +161,20 @@ checkRestored("工具步骤也渲染出来了", restored.text.includes("run_bash
 // 场景 3：localStorage 不可用（不透明 origin）-> 仍须能渲染
 await scenario("3. 存储不可用也不白屏", { withUrl: false });
 
+// 场景 4：侧栏收起状态从 localStorage 恢复 -> 应缩成窄条，只留展开按钮
+const rail = await scenario("4. 侧栏收起（缩成窄条）", { collapsed: true });
+const railCheck = (label, condition) => {
+  console.log(`  ${condition ? "✅" : "❌"} ${label}`);
+  if (!condition) failures += 1;
+};
+railCheck("侧栏带上了 is-collapsed", /is-collapsed/.test(rail.html));
+railCheck("窄条里只剩展开按钮", rail.text.includes("»"));
+railCheck("窄条里不再渲染会话列表", !/侧栏里的会话标题/.test(rail.text));
+railCheck("窄条里没有「新对话」", !rail.text.includes("新对话"));
+
 console.log();
 if (failures) {
   console.log(`失败 ${failures} 项`);
   process.exit(1);
 }
-console.log("UI 冒烟测试通过（3 个场景）");
+console.log("UI 冒烟测试通过（4 个场景）");
