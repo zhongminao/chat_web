@@ -19,6 +19,7 @@ tools/chat/                      # 仓库根（git 在这一层）
 │   │       ├── agent/           # 工具循环 + 四个工具 + 会话日志 + 工作区登记
 │   │       └── static/          # 前端**产物**与样式（app.js / index.html / styles.css / theme/）
 │   └── frontend/                # Node 包：前端源码，esbuild 打包（package.json / smoke.mjs / src/）
+├── evals/agent/                 # 评估：量 agent 循环的通过率（第 2 步，见下）
 ├── storage/                     # 运行时数据（**不进 git**）：sessions/*.jsonl + workspaces.json
 ├── workplace/                   # 一个工作区目录（agent 干活的地方，可增删）
 └── start_local_qwen.sh          # 本地 Qwen3.5-2B vLLM
@@ -157,21 +158,46 @@ localhost，在应用眼里和局域网设备完全一样。
 8. planning + 可见 UI
 9. search —— 走 API，不用本地 2B
 
-### 第 2 步怎么做（代码将放在 `evals/agent/`）
+### 第 2 步：评估（`evals/agent/`）
 
-判据是**世界变成什么样**，不是回复像不像。一个 case = fixture + 任务 + **机器可判的判定**
-（JSON 能 `load`、脚本输出对、文件 hash 没变、case 目录之外没有新文件）。
+判据是**世界变成什么样**，不是回复像不像。一个 case = `task.txt`（给模型的一句话）
++ `fixture/`（初始目录）+ `check.sh`（判定，在 case 的临时目录里跑，退出码 0 才算过）。
 
-- 第 1 层（不花钱）：脚本化 client（`demo_agent_loop.py` 里那个 `FakeClient` 就是种子），
-  断言 loop 机制与工具语义 —— 该停就停、报错后能继续、`tool_call_id` 配对、elision 头尾、
-  spill 落盘与取回、守卫三条路径
-- 第 2 层（真模型）：每 case 重复 N 次，报 pass@1 / pass^N + 轮数 + 耗时 + token
-- 结果落 append-only JSONL，带模型名 / 温度 / 日期 / `git rev-parse` —— 这样两次跑能 diff 出
-  "这次改动让哪个 case 变坏了"
-- **不需要服务端、前端、storage**：只 import 包，`make_executor(临时目录)` 一 case 一目录
+```bash
+python evals/agent/run.py                 # 全部 case 各跑一次
+python evals/agent/run.py -k rename       # 只跑名字含 rename 的
+python evals/agent/run.py --runs 3        # 每 case 三次（模型不确定，单次结果没意义）
+python evals/agent/run.py -m gpt-5.5      # 换模型跑，比一比
+python evals/agent/run.py --keep          # 留住临时目录，好进去看
+```
 
-> 缺口：**token 从来没被记录**（provider 返回的 `usage` 一次都没读），要报成本得先补。
-> 另外只有 5~10 个 case 时，数字是回归信号，不是"我的 agent 有 87 分"，别当排行榜用。
+- **走的是服务端同一条路径**：同一个 `TurnRequest` → `normalize_messages` → agent 循环，
+  只是把根目录换成 case 的临时目录。所以系统提示词怎么拼、工具怎么给，跟真实使用一致。
+- **两条护栏**（每个 case 自动带，不用各自实现）：`protected.txt` 里列的文件哈希不许变
+  （挡住"改测试让它过"）；跑前跑后各取一次仓库 `git status --short`，必须一模一样
+  （没有沙箱，这是唯一能抓住"agent 跑到 case 目录外乱改"的办法）。
+- 结果落 `results/<时间戳>.jsonl`（append-only，**进 git**），带模型名/温度/日期/git 版本
+  —— 两次跑能 diff 出"这次改动让哪个 case 变坏了"。轨迹另存 `sessions/`（不进 git），
+  格式与服务端会话日志相同，卡住时能翻。
+- **报错与"没做对"分开统计**：模型/网关层面没跑起来（记录里的 `error`）不计入通过率。
+  供应商抽风会把通过率打下去，那不是 agent 的能力问题，混在一起数字就没法看了 ——
+  那个 gpt 网关就偶发 400（同样的请求复现四次全成功，是它不稳定，不是代码）。
+  **agent 相关的事就用 `deepseek-flash` 量。**
+- **不需要服务端、前端、storage**：只 import 包。
+
+第一份基线（2026-09-12，deepseek-flash，每 case 1 次）：
+
+| case | 结果 | 步数 |
+|---|---|---|
+| `fix-until-green` | ✅ | 6 |
+| `rename-across-files` | ✅ | 13 |
+
+> 两个 case 都是**多步**任务（定位 → 读 → 改 → 跑验证），不是一次调用就能完事的小题。
+> 但只有 2 个 case 时，这些数字是**回归信号**，不是"我的 agent 有 100 分"，别当排行榜用。
+
+待补：**token/成本报不出来**（provider 返回的 `usage` 从没被读，要报成本得让 client
+把它带出来、由循环跨轮累加）；第 1 层（脚本化 client 的不花钱 case）也还没做 ——
+那层复用同一批 fixture，只换 driver。
 
 ## 沿革
 

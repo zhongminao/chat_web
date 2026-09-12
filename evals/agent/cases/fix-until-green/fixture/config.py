@@ -1,0 +1,5 @@
+"""服务配置。"""
+
+PORT = "8200"
+TIMEOUT_SECONDS = 30
+MAX_RETRIES = 3

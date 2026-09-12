@@ -1,0 +1,1 @@
+让 check_config.py 跑通（python3 check_config.py 不报错），不要修改 check_config.py 本身。

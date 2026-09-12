@@ -1,0 +1,2 @@
+把 total_price 这个函数名统一改成 grand_total —— 定义处和所有引用都要改，
+改完确保 python3 verify.py 能跑通。不要改 verify.py。
