@@ -113,9 +113,10 @@ ss -ltnp '( sport = :8200 )'
 - 密钥与运行时配置**不进仓库**：真实文件在 `~/.config/{chat,fortrix}/` 与
   `/usr/local/etc/cpolar/cpolar.yml`，仓库里连模板都不放。变量 → 文件的映射表见
   `config/README.md`
-- **chat 当前不对外**：cpolar 启动列表里已没有 chat8200，cpolar 本身也是 disabled。
-  只在局域网可达，因此**没有密码** —— 安全性建立在"只有局域网连得上"。要对外演示
-  时把 chat8200 加回 cpolar.service 的 ExecStart
+- **chat 当前不对外**：`cpolar.yml` 里的 `chat8200` 隧道已删（2026-09-12），cpolar 本身也是
+  disabled。只在局域网可达，因此**没有密码** —— 安全性建立在"只有局域网连得上"。
+  要对外时**往 `cpolar.yml` 的 `tunnels:` 下加回一个块**（服务用的是 `start-all`，
+  加了块就生效，不需要动 ExecStart —— 早先这里写成"加回 ExecStart"，那是指错了文件）
 - **`run_bash` 没有沙箱**：工具只是在工作区根里干活（相对路径/`cwd`），绝对路径照样
   能到任何地方。这是路线图第 5 步（见 `packages/chat/README.md`）
 - 运行时数据位置可以用 `CHAT_STORAGE` 钉死（systemd unit 里已显式给成 `<仓库>/storage`）：

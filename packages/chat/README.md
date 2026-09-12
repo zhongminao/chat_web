@@ -31,8 +31,9 @@ systemctl --user restart chat  # 以服务常驻时；日志见 journalctl --use
 - 模型目录：`src/chat/providers.yaml`，改完**不用重启**（每次请求重读）
 - `static/theme/` 是 DSH 上游 token 的逐字拷贝（MIT，许可见其中的 `LICENSE`，别删）。
   **别手改** —— 配色改 `styles.css`，或在自己的表里覆盖同名变量
-- 鉴权不在本进程：chat 当前只在局域网可达、**没有密码**（公网入口已撤）。应用层区分
-  不出来源，所以这件事不在这里做。要对外时把 chat8200 加回 cpolar 的启动列表
+- 鉴权不在本进程：chat 当前只在局域网可达、**没有密码**（公网隧道已删）。应用层区分
+  不出来源，所以这件事不在这里做 —— 要对外时往 `cpolar.yml` 的 `tunnels:` 加回一个块，
+  密码写在那层的 `auth` 上（详见仓库根 `config/README.md`）
 - **`run_bash` 没有沙箱**：工具只是在工作区根里干活（相对路径按它解析、bash 的 cwd
   是它），绝对路径照样能到任何地方。这是路线图的第 5 步
 

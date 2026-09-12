@@ -19,8 +19,9 @@
 > 最后两行是同机的另外两个服务，与本仓库无关 —— 列出来只是因为它们历史上与 chat
 > 共用 cpolar，排查时最容易混。
 >
-> **chat 当前不对外**：cpolar 启动列表里已没有 chat8200，且 cpolar 是 disabled。
-> `cpolar.yml` 里 chat8200 那个块的 `auth` 只在重新对外演示时才起作用。
+> **chat 当前不对外**：`cpolar.yml` 里的 `chat8200` 与 `fortrix8000` 两个块已于
+> 2026-09-12 删除，现在只剩 `408ssh`（tcp 22）；cpolar 本身也是 disabled。
+> 也就是说 `authtoken` 与各隧道 `auth` 这两行现在是"以后要对外时才会再出现"的配置。
 
 `CHAT_STORAGE` / `CHAT_WORKSPACE` 不是密钥，所以直接写在 systemd unit 里，不塞进
 EnvironmentFile：它们是**路径**，改了能立刻看出问题，没必要藏起来。
@@ -35,9 +36,21 @@ unit 用 `-` 前缀，文件缺失不影响启动。要加变量再创建它，�
 局域网直连 8200 不需要密码；公网入口撤掉之后，也就没有"公网要密码"这回事了。
 安全性完全建立在"只有局域网连得上"之上。
 
-将来要对外演示，把 chat8200 加回 `cpolar.service` 的 ExecStart，密码就由那一层的
-`auth` 负责 —— 为什么不放在应用层：应用层分不清请求来源（cpolar 客户端连的是
-localhost，和局域网设备在应用眼里一样），只有边缘那一层才是结构性的。
+将来要对外，**往 `/usr/local/etc/cpolar/cpolar.yml` 的 `tunnels:` 下加回一个隧道块**，
+密码由那个块的 `auth` 负责：
+
+```yaml
+  chat8200:
+    proto: http
+    addr: "8200"
+    region: cn_vip
+    redirect_https: true
+    auth: "用户名:密码"      # cpolar 边缘的 Basic Auth（键名就是 auth，不是 http_auth）
+```
+
+为什么不把密码放在应用层：应用层分不清请求来源（cpolar 客户端连的是 localhost，
+和局域网设备在应用眼里完全一样），只有边缘那一层才是结构性地能区分"公网 / 局域网"。
+服务用的是 `cpolar start-all -config=...`，所以**加块即生效，不必改 unit**。
 
 ## 新增配置时
 
