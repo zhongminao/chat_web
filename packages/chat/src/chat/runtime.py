@@ -73,8 +73,9 @@ CLI_SESSION_FILE = STORAGE_DIR / "cli-session"
 # 这件事有落点：沙箱将来要判断的正是"目标路径在不在某个工作区的根下面"。
 DEFAULT_WORKSPACE_ROOT = Path(os.environ.get("CHAT_WORKSPACE") or Path.cwd()).resolve()
 
-DEFAULT_PROVIDER = "gpt"
-DEFAULT_MODEL_NAME = "gpt-5.5"
+# 默认供应商/模型。改这里就够 —— /api/providers 会把它们发给前端，CLI 也用它当默认值。
+DEFAULT_PROVIDER = "deepseek"
+DEFAULT_MODEL_NAME = "deepseek-flash"
 DEFAULT_TEMPERATURE = 0.2
 DEFAULT_SYSTEM_PROMPT = (
     "You are a helpful assistant. "

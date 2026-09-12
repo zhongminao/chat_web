@@ -10,11 +10,15 @@ from pydantic import BaseModel, Field
 # 路径 / 环境 / 消息归一 / 一轮对话 —— 全在 runtime.py，CLI 用的是同一份实现。
 # 这个文件只留 HTTP 那一层：请求响应模型 + 路由 + 静态文件。
 # 路由直接用这两个 store（runtime 里也用，但它不 re-export —— 直接用比再包一层清楚）
+from chat import list_providers
 from chat.agent import session_store, workspace_store
 from chat.runtime import (
     DEFAULT_MODEL_NAME,
     DEFAULT_PROVIDER,
+    DEFAULT_SYSTEM_PROMPT,
+    DEFAULT_WORKSPACE_ROOT,
     SESSION_DIR,
+    TOOL_SYSTEM_PROMPT,
     WORKSPACE_DIR,
     ChatMessage,
     TurnRequest,

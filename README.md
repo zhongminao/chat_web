@@ -69,6 +69,14 @@ pnpm run watch      # 改完自动重建
 pnpm run check      # build + smoke（jsdom 里真跑一遍产物）
 ```
 
+界面那套 smoke 把 fetch 全 stub 掉了 —— 它验的是"给定数据下渲染对不对"，**后端接口
+500 它照样全绿**（真被咬过：`/api/providers` 500 的表现是网页上模型选择器整个用不了，
+而 smoke 一直是绿的）。所以后端另有一条，两个都要跑：
+
+```bash
+python packages/chat/check_api.py   # 把所有路由真调一遍，任何 5xx 就失败
+```
+
 产物**提交进仓库**，所以不碰前端的人 clone 下来直接能跑，机器上不需要 Node。
 
 ## 配置与密钥
@@ -114,7 +122,9 @@ pnpm run check      # build + smoke（jsdom 里真跑一遍产物）
   关掉工具时 `normalize_messages` 会丢掉历史里的工具协议消息，等于静默截断历史。
   还没开始那场对话时拨的开关只是本地草稿，随第一条消息写进那一轮的记录
 - **工作区决定 agent 在哪干活**：相对路径按它解析、`run_bash` 的 `cwd` 是它
-- 默认模型 `gpt-5.5`
+- 默认是 `deepseek` / `deepseek-flash`：改 `src/chat/runtime.py` 那两个常量即可 ——
+  `/api/providers` 会把它们发给界面（**界面的默认值听服务端，不看供应商列表顺序**），
+  CLI 也拿它们当默认值
 - **`run_bash` 没有沙箱**：绝对路径照样能到任何地方。这是路线图第 5 步
 
 ## 安全边界

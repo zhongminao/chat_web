@@ -110,9 +110,17 @@ export default function App() {
         }
         setToolSystemPrompt(data.tool_system_prompt || "");
         setBaseSnapshot(data.default_system_prompt || "");
-        if (list.length > 0) {
-          setProvider(list[0].provider);
-          setModelName(list[0].models?.[0]?.id || "");
+        // 默认用服务端指定的那个，**不是列表第一个** —— 列表顺序只是 providers.yaml
+        // 的书写顺序，跟"默认用哪个"是两件事（以前混在一起，导致改服务端默认值对
+        // 界面完全无效）。服务端没给、或给的供应商不在列表里，才回落到第一个。
+        const fallback = list[0];
+        const chosen =
+          list.find((entry) => entry.provider === data.default_provider) || fallback;
+        if (chosen) {
+          setProvider(chosen.provider);
+          const wanted = chosen.provider === data.default_provider ? data.default_model : null;
+          const inList = (chosen.models || []).some((model) => model.id === wanted);
+          setModelName((inList && wanted) || chosen.models?.[0]?.id || "");
         }
         setProvidersReady(true);
       })

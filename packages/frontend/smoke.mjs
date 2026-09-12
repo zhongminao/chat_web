@@ -22,8 +22,12 @@ const STATIC_DIR = new URL("../chat/src/chat/static/", import.meta.url);
 const html = readFileSync(new URL("index.html", STATIC_DIR), "utf-8");
 const bundle = readFileSync(new URL("app.js", STATIC_DIR), "utf-8");
 
+// 故意把"列表第一个"和"默认那个"设成不同的：界面必须听 default_provider/default_model，
+// 而不是 providers.yaml 的书写顺序（以前就是这么错的 —— 改服务端默认值对界面无效）。
 const providers = {
   providers: [
+    { provider: "gpt", display_name: "GPT (忘川_网关)",
+      models: [{ id: "gpt-5.5", name: "GPT-5.5", temperature: 0.2 }] },
     { provider: "deepseek", display_name: "DeepSeek",
       models: [{ id: "deepseek-flash", name: "DeepSeek Flash", temperature: 0.2 }] },
   ],
@@ -196,7 +200,11 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
   check("输入框存在", !!window.document.querySelector("textarea, input[type=text]"));
   check("请求了供应商目录", fetchCalls.some((u) => u.includes("/api/providers")));
   // 覆盖 providers -> state -> 渲染 这条链：接口回来了要真的显示到 chip 上
-  check("模型 chip 显示出接口返回的模型名", text.includes("DeepSeek Flash"));
+  // 断言的是"默认那个"，不是"列表第一个"：fixture 里列表第一个是 GPT-5.5，
+  // 默认给的是 DeepSeek Flash —— 只有真听了 default_model 才会显示后者。
+  check("模型 chip 显示的是 default_model（不是列表第一个）",
+        text.includes("DeepSeek Flash") && !text.includes("GPT-5.5"),
+        `实得 ${JSON.stringify(text.slice(0, 60))}`);
   check("发送按钮在", !!window.document.querySelector("button[type=submit]"));
   // 侧栏内容只在展开时才有 —— 收起场景里断言这些等于自相矛盾，所以按状态分开。
   // 刻意取元素而不是全文 includes："chat" 这种短串用 includes 判可能撞到别处，等于没测。
