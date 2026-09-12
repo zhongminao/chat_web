@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
 
-import { fetchProviders, fetchSessionItems, sendChat } from "./api";
+import { fetchProviders, fetchSessionItems, fetchSessions, sendChat } from "./api";
 import { newSessionId, readStoredSessionId, writeStoredSessionId } from "./session";
 import Composer from "./components/Composer";
 import MessageList from "./components/MessageList";
+import SessionSidebar from "./components/SessionSidebar";
 import SystemPanel from "./components/SystemPanel";
 
 function createId() {
@@ -30,6 +31,8 @@ function toDisplayItems(items) {
 
 export default function App() {
   const [messages, setMessages] = useState([]);
+  const [sessions, setSessions] = useState([]);
+  const [workspace, setWorkspace] = useState("");
   const [sessionId, setSessionId] = useState(() => {
     const saved = readStoredSessionId();
     if (saved) {
@@ -52,6 +55,16 @@ export default function App() {
   const [baseSnapshot, setBaseSnapshot] = useState("");
   const [temperature, setTemperature] = useState(null);
 
+  // 侧栏数据。每轮对话结束后要重取一次 —— 标题和轮数都跟着变。
+  function refreshSessions() {
+    fetchSessions()
+      .then((data) => {
+        setSessions(data.sessions || []);
+        setWorkspace(data.workspace || "");
+      })
+      .catch(() => {});
+  }
+
   useEffect(() => {
     fetchProviders()
       .then((data) => {
@@ -69,6 +82,10 @@ export default function App() {
         }
       })
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    refreshSessions();
   }, []);
 
   // 历史归服务端，这里只拿 id 把这场对话拉回来。与上面那个 effect 分开写：
@@ -132,6 +149,7 @@ export default function App() {
       }));
       newItems.push({ id: createId(), role: "assistant", content: data.reply });
       setMessages((currentMessages) => [...currentMessages, ...newItems]);
+      refreshSessions();   // 标题/轮数变了，侧栏跟着更新
     } catch (error) {
       // 失败只进展示：服务端也不把这次提问写进历史，所以重试是干净的。
       setMessages((currentMessages) => [
@@ -155,12 +173,21 @@ export default function App() {
     }
   }
 
-  // 清空 = 换一场新会话。旧的仍留在 storage/sessions/ 里，把 localStorage 里的
-  // chat.sessionId 换回旧值刷新即可找回。
+  // 清空 = 换一场新会话。旧的仍留在 storage/sessions/ 里，随时能从侧栏点回去。
   function clearMessages() {
     const fresh = newSessionId();
     writeStoredSessionId(fresh);
     setSessionId(fresh);
+    setMessages([]);
+  }
+
+  // 从侧栏切到另一场对话：换 id 即可，历史那个 effect 会把它拉回来。
+  function selectSession(nextSessionId) {
+    if (nextSessionId === sessionId) {
+      return;
+    }
+    writeStoredSessionId(nextSessionId);
+    setSessionId(nextSessionId);
     setMessages([]);
   }
 
@@ -193,6 +220,14 @@ export default function App() {
 
   return (
     <main className="page">
+      <SessionSidebar
+        workspace={workspace}
+        sessions={sessions}
+        activeId={sessionId}
+        onSelect={selectSession}
+        onNew={clearMessages}
+      />
+
       <section className="card">
         <header className="header">
           <h1>AI 聊天助手</h1>
@@ -215,9 +250,6 @@ export default function App() {
             />
             工具模式
           </label>
-          <button type="button" className="secondary-button" onClick={clearMessages}>
-            清空对话
-          </button>
         </header>
 
         {isSystemPanelOpen ? (

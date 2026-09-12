@@ -39,6 +39,15 @@ const storedItems = [
   { kind: "assistant", content: "历史里的回答" },
 ];
 
+/* 侧栏用的会话列表。 */
+const sessionList = {
+  workspace: "/home/zhong/mydisk/tools/chat",
+  sessions: [
+    { id: "web-test-restore", title: "侧栏里的会话标题", turns: 3,
+      lastActivity: Date.now(), workspace: "/home/zhong/mydisk/tools/chat" },
+  ],
+};
+
 let failures = 0;
 
 async function scenario(name, { withUrl = true, seedSession = null, sessionItems = null } = {}) {
@@ -66,9 +75,13 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
   window.fetch = (url) => {
     const target = String(url);
     fetchCalls.push(target);
-    const body = target.includes("/api/sessions/")
-      ? (sessionItems ?? {})
-      : providers;
+    // 注意 /api/sessions 与 /api/sessions/<id> 是两个不同的接口，别用 includes 混了
+    let body = providers;
+    if (target.includes("/api/sessions/")) {
+      body = sessionItems ?? {};
+    } else if (target.endsWith("/api/sessions")) {
+      body = sessionList;
+    }
     return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
   };
 
@@ -101,6 +114,16 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
   // 覆盖 providers -> state -> 渲染 这条链：接口回来了要真的显示到 chip 上
   check("模型 chip 显示出接口返回的模型名", text.includes("DeepSeek Flash"));
   check("发送按钮在", !!window.document.querySelector("button[type=submit]"));
+  // 侧栏：两个接口回来之后都要落到界面上。刻意取元素而不是全文 includes ——
+  // "chat" 这种短串用 includes 判可能撞到别处，等于没测。
+  const workspaceEl = window.document.querySelector(".sidebar-workspace-name");
+  const sessionTitleEl = window.document.querySelector(".session-item-title");
+  check("侧栏工作区名 = 路径末端目录",
+        workspaceEl?.textContent === "chat", `实得 ${JSON.stringify(workspaceEl?.textContent)}`);
+  check("侧栏会话标题 = 接口返回的标题",
+        sessionTitleEl?.textContent === "侧栏里的会话标题",
+        `实得 ${JSON.stringify(sessionTitleEl?.textContent)}`);
+  check("新对话按钮在", text.includes("新对话"));
 
   if (pageErrors.length) {
     console.log("  --- 页面报错 ---");

@@ -29,11 +29,134 @@
  * 滚动交给正文区而不是整页，这样顶栏和输入框在长对话里始终在位。
  * ------------------------------------------------------------------------- */
 .page {
+  display: flex;
   height: 100%;
   margin: 0;
 }
 
+/* ===========================================================================
+ * 侧栏：工作区 + 会话历史
+ * ---------------------------------------------------------------------------
+ * 规格对齐 DSH：
+ *   默认宽 280px（上游 ui-layout/src/client/columns.ts 的 SIDEBAR_DEFAULT；
+ *     min 264 / max 420，这里不做拖拽所以取默认值）
+ *   内边距 12px、新会话按钮 38px 高 / 圆角 12px / 字号 14px
+ *     （ui-sidebar 的 SidebarRoot.module.css，New Session 那段）
+ *   视口 < 1024px 自动收起（上游的 SIDEBAR_AUTO_COLLAPSE）—— 上游收成 56px
+ *     的图标 rail，这里还没有 rail，直接隐藏
+ * 条目沿用本应用已有的语汇：圆角 10px（同 .model-cell），hover 用
+ * --dsw-alias-interactive-bg-hover。
+ * ======================================================================== */
+
+.sidebar {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 280px;
+  padding: 12px;
+  background: var(--dsw-alias-bg-layer-1);
+  border-right: 1px solid var(--dsw-alias-border-l1);
+}
+
+.sidebar-workspace {
+  flex: none;
+  display: flex;
+  align-items: center;
+  height: 44px;
+  padding: 0 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary);
+  overflow: hidden;
+}
+
+.sidebar-workspace-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.new-session-button {
+  flex: none;
+  height: 38px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 12px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  cursor: pointer;
+}
+
+.new-session-button:hover {
+  background: var(--dsw-alias-border-l1);
+}
+
+.session-list {
+  flex: 1;
+  min-height: 0;              /* flex 子项默认 min-height:auto 会撑破容器 */
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 -4px;
+  padding: 0 4px;
+  overflow-y: auto;
+}
+
+.session-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-item:hover,
+.session-item.is-active {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.session-item-title {
+  font-size: 14px;
+  line-height: 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-item-meta {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-caption);
+}
+
+.session-empty {
+  padding: 8px 10px;
+  font-size: 13px;
+  color: var(--dsw-alias-label-caption);
+}
+
+/* 上游在这个断点把侧栏收成 56px 的控制 rail；这里没有 rail，先直接隐藏。
+   （已知缺口：窄屏下也就点不到会话列表了，等真有需要再做抽屉或 rail。） */
+@media (max-width: 1024px) {
+  .sidebar {
+    display: none;
+  }
+}
+
 .card {
+  flex: 1;
+  min-width: 0;               /* 不加的话内部长内容会把这一列顶宽，挤掉侧栏 */
   display: flex;
   flex-direction: column;
   height: 100%;

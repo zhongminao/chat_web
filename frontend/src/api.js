@@ -5,6 +5,12 @@ export async function fetchProviders() {
   return response.json();
 }
 
+// 侧栏用：{workspace, sessions: [{id, title, workspace, turns, lastActivity, createdAt}]}
+export async function fetchSessions() {
+  const response = await fetch("/api/sessions");
+  return response.json();
+}
+
 // 历史里还没说过话时服务端返回 404 —— 那是正常情况，不是错误。
 export async function fetchSessionItems(sessionId) {
   const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);

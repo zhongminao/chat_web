@@ -15,6 +15,16 @@ STATIC_DIR = BASE_DIR / "static"
 # 位置由这里决定而不是 chat_agent：那个包是独立可安装的，不该知道仓库布局。
 STORAGE_DIR = BASE_DIR.parent / "storage"
 SESSION_DIR = STORAGE_DIR / "sessions"   # 会话日志就是状态本身
+
+# 会话绑定的工作目录 —— **也是将来沙箱的边界**。
+#
+# 现在还没有任何东西读它来限制访问（run_bash 仍是 shell=True、能走到任何地方），
+# 它只被记进会话日志。留着它是为了让"限制"将来有个明确的落点：沙箱需要的配置
+# 就是这一个值，允许 agent 活动的根。
+#
+# 单值、可用环境变量覆盖。默认取进程的工作目录 —— systemd unit 的
+# WorkingDirectory 正是仓库根，所以现在等价于"在这份代码里干活"。
+WORKSPACE_ROOT = Path(os.environ.get("CHAT_WORKSPACE") or Path.cwd()).resolve()
 DEFAULT_PROVIDER = "gpt"
 DEFAULT_MODEL_NAME = "gpt-5.5"
 DEFAULT_TEMPERATURE = 0.2
@@ -322,7 +332,16 @@ def create_session(
 @app.get("/api/sessions")
 def list_sessions(
     ) -> dict:
-    return {"sessions": session_store.list_sessions(SESSION_DIR)}
+    """侧栏用的会话列表。
+
+    workspace 放顶层而不是每行重复一遍：当前服务只有一个工作区（进程的
+    WorkingDirectory）。行级那个 workspace 字段是给将来"多工作区、按区分组"
+    留的，现在每行都一样。
+    """
+    return {
+        "workspace": str(WORKSPACE_ROOT),
+        "sessions": session_store.list_sessions(SESSION_DIR),
+    }
 
 
 @app.get("/api/sessions/{session_id}")
@@ -338,7 +357,8 @@ def get_session(
     if safe_id is None or not session_store.exists(SESSION_DIR, safe_id):
         raise HTTPException(status_code=404, detail="session not found")
 
-    return {"id": safe_id, "items": session_store.load_items(SESSION_DIR, safe_id)}
+    return {"id": safe_id, "workspace": session_store.load_workspace(SESSION_DIR, safe_id),
+            "items": session_store.load_items(SESSION_DIR, safe_id)}
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -361,6 +381,7 @@ def chat(
         session_store.append_turn(
             SESSION_DIR, session_id,
             user_messages=[], protocol=[],
+            workspace=str(WORKSPACE_ROOT),
             meta={
                 "error": str(exc),
                 "attempted": [message.content for message in payload.messages],
@@ -374,6 +395,7 @@ def chat(
         SESSION_DIR, session_id,
         user_messages=[message.model_dump() for message in payload.messages],
         protocol=result.trace,
+        workspace=str(WORKSPACE_ROOT),
         meta={
             "provider": payload.provider,
             "model": payload.model_name,

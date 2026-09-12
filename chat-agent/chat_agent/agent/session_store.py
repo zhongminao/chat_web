@@ -151,9 +151,14 @@ def append_turn(
     user_messages: list[dict[str, Any]],
     protocol: list[dict[str, Any]],
     meta: dict[str, Any],
+    workspace: str | None = None,
     ) -> Path | None:
     """追加一轮。失败返回 None（调用方不该因此失败 —— 但会话模式下这是状态，
-    所以失败要显式处理，不能像 trace 那样静默）。"""
+    所以失败要显式处理，不能像日志那样静默）。
+
+    workspace: 这场对话绑定的**工作目录绝对路径**。只在首行 header 里记一次 ——
+    它一旦绑定就不该变（半路换目录，历史里那些相对路径的含义就全乱了）。
+    """
     try:
         path = session_file(base_dir, session_id)
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -168,6 +173,7 @@ def append_turn(
                         "version": VERSION,
                         "id": session_id,
                         "createdAt": int(time.time() * 1000),
+                        "workspace": workspace,
                     },
                     ensure_ascii=False,
                 )
@@ -202,8 +208,30 @@ def append_turn(
         return None
 
 
+TITLE_LENGTH = 24
+
+
+def derive_title(records: list[dict[str, Any]]) -> str:
+    """标题 = 第一条用户消息的前几个字符。
+
+    从日志现算，不落盘：它只是渲染用的投影，存下来就会和原文漂移（DSH 那边的
+    标题投影还带 seq 水位线，就是为了处理这件事 —— 这里便宜得多，直接每次算）。
+    """
+    for record in records:
+        if record.get("type") != "user":
+            continue
+        text = " ".join(str(record.get("content") or "").split())
+        if not text:
+            continue
+        return text[:TITLE_LENGTH] + ("…" if len(text) > TITLE_LENGTH else "")
+    return "(空对话)"
+
+
 def list_sessions(base_dir: Path | str) -> list[dict[str, Any]]:
-    """列会话元数据（id / 创建时间 / 轮数 / 最后活动）。"""
+    """列会话元数据：id / 标题 / 工作区 / 创建时间 / 轮数 / 最后活动。
+
+    按最后活动倒序 —— 侧栏就是这么排的。
+    """
     result: list[dict[str, Any]] = []
     try:
         for path in sorted(Path(base_dir).glob("*.jsonl")):
@@ -215,6 +243,8 @@ def list_sessions(base_dir: Path | str) -> list[dict[str, Any]]:
             result.append(
                 {
                     "id": path.stem,
+                    "title": derive_title(records),
+                    "workspace": header.get("workspace"),
                     "createdAt": header.get("createdAt"),
                     "turns": len(turns),
                     "lastActivity": turns[-1].get("time") if turns else header.get("createdAt"),
@@ -224,3 +254,11 @@ def list_sessions(base_dir: Path | str) -> list[dict[str, Any]]:
         return []
     result.sort(key=lambda item: item.get("lastActivity") or 0, reverse=True)
     return result
+
+
+def load_workspace(base_dir: Path | str, session_id: str) -> str | None:
+    """这场会话绑定的工作目录（首行 header 里那个）。"""
+    for record in read_records(base_dir, session_id)[:1]:
+        if record.get("type") == "session":
+            return record.get("workspace")
+    return None
