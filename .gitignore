@@ -22,10 +22,6 @@ dist/
 *.env.*
 !*.env.example
 
-# 野软链接：llm_client/llm_client/pi -> ../../pi（另一个 TS 项目），
-# 无任何代码引用，2026-09-04 误建。不进仓库（删掉更好）。
-llm_client/llm_client/pi
-
 # UI 改造前的本地备份：留在磁盘上备查，但不进版本库
 # （git 已经有历史了，这类目录进仓库只会让 diff 变脏）
 static-backup-*/

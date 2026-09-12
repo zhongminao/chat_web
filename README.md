@@ -11,7 +11,7 @@ tools/chat/
 │   ├── __main__.py         # 启动入口（python -m chat）
 │   ├── app.py              # FastAPI 后端
 │   └── static/             # React 前端（index.html / main.jsx / styles.css）
-├── llm_client/             # 独立可安装的 LLM 客户端库（零项目依赖，仅 openai+pyyaml）
+├── llm-client/             # 独立可安装的 LLM 客户端库（零项目依赖，仅 openai+pyyaml）
 │   ├── pyproject.toml
 │   └── llm_client/
 │       ├── openai_client.py    # Client + ConversationSession
@@ -20,15 +20,20 @@ tools/chat/
 └── start_local_qwen.sh     # 本地 Qwen3.5-2B vLLM 服务
 ```
 
+> ⚠️ **项目目录叫 `llm-client`（连字符），不要改成 `llm_client`。** 目录名若与包名
+> 相同，仓库根就成了 `sys.path[0]` 上的同名**命名空间包**，会把真包遮蔽掉 ——
+> `chat.service` 的 `WorkingDirectory` 正是仓库根，后果是服务启动即 `ImportError`。
+> 连字符使该目录无法被 `import`，从根本上排除这种遮蔽。
+
 **一个仓库、两个包**：`chat` 是 Web 应用，`llm_client` 是库。二者通过 `trace` 契约耦合
 （循环产出 → 接口转出 → 前端回放），改动经常跨包，所以 git 合在一起、包各自独立。
 
 ## 启动
 
 ```bash
-pip install -e ~/mydisk/tools/chat             # chat 应用
-pip install -e ~/mydisk/tools/chat/llm_client  # llm-client 库（装一次即可）
-python -m chat [port]                          # 任意目录下启动，默认端口 8200
+pip install -e ~/mydisk/tools/chat            # chat 应用
+pip install -e ~/mydisk/tools/chat/llm-client # llm-client 库（装一次即可）
+python -m chat [port]                         # 任意目录下启动，默认端口 8200
 ```
 
 打开：

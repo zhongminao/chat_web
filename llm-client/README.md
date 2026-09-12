@@ -8,8 +8,11 @@
 
 仅依赖 `openai` 和 `pyyaml`。
 
-本包与 chat 应用同处一个仓库（`tools/chat/llm_client/`），但**仍是可独立安装的包**：
+本包与 chat 应用同处一个仓库（`tools/chat/llm-client/`），但**仍是可独立安装的包**：
 把仓库和包两个边界分开 —— 合的是 git，不是包。理由见仓库根 `README.md`。
+
+项目目录名带**连字符**（`llm-client`）是刻意的：若与包名 `llm_client` 同名，仓库根就会
+把真包遮蔽掉（详见仓库根 `README.md` 的警告）。连字符同时与 pyproject 里的发行名一致。
 
 ## 智能体路线图（重心在 `llm_client/agent/`，按序勿跳步）
 
@@ -27,7 +30,7 @@
 ### 方式一：editable 安装（开发/日常推荐）
 
 ```bash
-cd ~/mydisk/tools/chat/llm_client
+cd ~/mydisk/tools/chat/llm-client
 pip install -e .
 ```
 
@@ -89,11 +92,11 @@ pip uninstall llm-client
 ## 目录结构
 
 ```
-llm_client/
+llm-client/                 # 项目目录：连字符，刻意不与包名同名（见仓库根 README 警告）
 ├── pyproject.toml          # 包元数据与依赖声明
 ├── README.md
 ├── demo_agent_loop.py      # agent 循环的可跑示例（不在包内，不随包分发）
-└── llm_client/
+└── llm_client/             # 包目录：下划线，可被 import
     ├── __init__.py         # re-export 公开 API
     ├── openai_client.py    # Client + ConversationSession 实现
     ├── providers.yaml      # 供应商目录（随包分发，__file__ 相对加载）
