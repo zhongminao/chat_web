@@ -103,6 +103,19 @@ def print_steps(steps: list[dict]) -> None:
         print(f"      {preview}")
 
 
+def resolve_tools_enabled(session_id: str, requested: bool) -> tuple[bool, bool]:
+    """这场会话**实际**用哪个工具开关：说过话的以日志里记的为准。
+
+    返回 (生效值, 是否和请求的不一致)。服务端对中途改动是 409 拒绝，CLI 不把用户
+    拦在门外 —— 直接沿用记录值并说明一句。
+    """
+    if session_store.turn_count(SESSION_DIR, session_id) > 0:
+        recorded = session_store.load_settings(SESSION_DIR, session_id).get("toolsEnabled")
+        if recorded is not None:
+            return bool(recorded), bool(recorded) != requested
+    return requested, False
+
+
 def run_turn(
     session_id: str,
     message: str,
@@ -111,18 +124,9 @@ def run_turn(
     provider: str,
     model_name: str,
     system_prompt: str | None,
-    tools_requested: bool,
+    tools_enabled: bool,
 ) -> str:
     """跑一轮，写进会话日志，返回模型的回复。"""
-    # 工具开关：说过的会话沿用日志里记的值（跟服务端拒绝中途改是同一条规矩）
-    tools_enabled = tools_requested
-    if session_store.turn_count(SESSION_DIR, session_id) > 0:
-        stored = bool(session_store.load_settings(SESSION_DIR, session_id).get("toolsEnabled"))
-        if stored != tools_requested:
-            print(f"  （这场会话的工具开关已在首轮定为 {'开' if stored else '关'}，"
-                  f"沿用日志里的值；要改请开新会话）")
-        tools_enabled = stored
-
     prior_messages = [
         ChatMessage(**record) for record in session_store.load_history(SESSION_DIR, session_id)
     ]
@@ -180,10 +184,16 @@ def main(argv: list[str] | None = None) -> int:
     # 放在跑之前：环境变量（API key）要从 ~/.bashrc 读进来，跟服务端同一条路
     ensure_runtime_env(args.provider)
 
+    tools_enabled, overridden = resolve_tools_enabled(session_id, args.tools)
+
     print(f"会话 {session_id}")
     print(f"工作区 {workspace.get('name')} → {workspace.get('root')}")
-    print(f"模型 {args.provider}/{args.model}｜工具 {'开' if args.tools else '关'}"
-          f"（首轮定下，之后沿用）\n")
+    print(f"模型 {args.provider}/{args.model}｜工具 {'开' if tools_enabled else '关'}"
+          f"（首轮定下，之后沿用）")
+    if overridden:
+        print(f"  （你说的是 {'开' if args.tools else '关'}，但这场会话首轮定的是 "
+              f"{'开' if tools_enabled else '关'}，沿用日志里的值；要改请开新会话）")
+    print()
 
     def one_round(text: str) -> None:
         try:
@@ -193,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
                 provider=args.provider,
                 model_name=args.model,
                 system_prompt=args.system,
-                tools_requested=args.tools,
+                tools_enabled=tools_enabled,
             )
         except Exception as exc:
             print(f"❌ 这一轮失败：{exc}\n")

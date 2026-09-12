@@ -297,41 +297,20 @@ def turn_count(base_dir: Path | str, session_id: str) -> int:
 # 会话级设置
 # ---------------------------------------------------------------------------
 #
-# 「是否使用工具」这类开关决定的是**这个对话能做什么**，所以它属于对话，不属于界面。
-# 落在日志里（`settings` 记录，后写覆盖先写），切到别的对话时跟着变回来。
+# 会话级设置：目前只有"是否使用工具"这一个开关。
 #
-# 兜底：老会话没有 settings 记录，就退回去读它最后一轮的 toolsEnabled ——
-# 那时候这个开关是每轮记在 turn 元信息里的，信息本来就在，不用迁移。
-
-def append_settings(
-    base_dir: Path | str,
-    session_id: str,
-    settings: dict[str, Any],
-    ) -> None:
-    try:
-        path = session_file(base_dir, session_id)
-        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        record = {"type": "settings", "time": int(time.time() * 1000), **settings}
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-        with os.fdopen(fd, "a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except Exception:
-        return
-
-
+# 它决定的是**这个对话能做什么**，所以属于对话、不属于界面 —— 跟着这一场对话走，
+# 切到别的对话时跟着变回来。而它记在**每一轮的 turn 元信息**里（那一轮实际用的值），
+# 不再有单独的 settings 记录：那种记录只可能在"还没说过话"的会话里出现（说过话就
+# 拒绝改），内容又跟第一轮 meta 重复，唯一作用是"发消息前刷新页面还记得开关" ——
+# 那属于界面状态。**没说过话就不该有会话文件**，所以这条路整个删掉了。
 def load_settings(base_dir: Path | str, session_id: str) -> dict[str, Any]:
+    """这场会话的设置：取**最后一轮**记下的值；没有轮次就返回空。"""
     records = read_records(base_dir, session_id)
-    settings: dict[str, Any] = {}
-    for record in records:
-        if record.get("type") == "settings":
-            settings.update(
-                {key: value for key, value in record.items() if key not in ("type", "time")}
-            )
-    if "toolsEnabled" not in settings:
-        last_turn = next(
-            (r for r in reversed(records) if r.get("type") == "turn" and "toolsEnabled" in r),
-            None,
-        )
-        if last_turn is not None:
-            settings["toolsEnabled"] = last_turn["toolsEnabled"]
-    return settings
+    last_turn = next(
+        (r for r in reversed(records) if r.get("type") == "turn" and "toolsEnabled" in r),
+        None,
+    )
+    if last_turn is None:
+        return {}
+    return {"toolsEnabled": last_turn["toolsEnabled"]}

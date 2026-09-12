@@ -67,12 +67,6 @@ class WorkspaceRequest(BaseModel):
     name: str | None = None
 
 
-class SessionSettingsRequest(BaseModel):
-    """会话级设置。目前只有这一个开关 —— 它决定的是"这个对话能做什么"，
-    所以属于对话而不是界面。"""
-
-    toolsEnabled: bool | None = None
-
 class ChatResponse(BaseModel):
     reply: str
     steps: list[dict] = Field(default_factory=list)  # 工具执行流水账（agent 模式才有）
@@ -258,12 +252,6 @@ def delete_session(
     return {"deleted": session_id}
 
 
-@app.post("/api/sessions")
-def create_session(
-    ) -> dict:
-    return {"id": session_store.new_id()}
-
-
 @app.get("/api/sessions")
 def list_sessions(
     workspaceId: str | None = None,
@@ -350,31 +338,6 @@ def get_session(
     }
 
 
-@app.patch("/api/sessions/{session_id}")
-def update_session_settings(
-    session_id: str,
-    payload: SessionSettingsRequest,
-    ) -> dict:
-    """改会话级设置。追加一条 settings 记录，后写覆盖先写。
-
-    工具开关在会话已经说过话之后**拒绝改动** —— 界面会把它置灰，但真正的约束
-    放在服务端：不然换个客户端就能绕过去。
-    """
-    safe_id = session_store.sanitize_id(session_id)
-    if safe_id is None:
-        raise HTTPException(status_code=400, detail="invalid sessionId")
-
-    changes = payload.model_dump(exclude_none=True)
-    if "toolsEnabled" in changes and session_store.turn_count(SESSION_DIR, safe_id) > 0:
-        raise HTTPException(
-            status_code=409,
-            detail="这个对话已经说过了，工具开关不再可改 —— 请开新对话",
-        )
-    if changes:
-        session_store.append_settings(SESSION_DIR, safe_id, changes)
-    return {"settings": session_store.load_settings(SESSION_DIR, safe_id)}
-
-
 @app.post("/api/chat", response_model=ChatResponse)
 def chat(
     payload: ChatRequest,
@@ -386,6 +349,19 @@ def chat(
     bound_workspace_id = session_store.load_workspace_id(SESSION_DIR, session_id)
     if bound_workspace_id is None:
         bound_workspace_id = resolve_workspace(payload.workspaceId)["id"]
+    # 工具开关：说过话的会话**不许中途改**，以最后一轮记下的值为准。
+    #
+    # 以前这条约束挂在 PATCH 上（那个接口已经删了 —— 它会在磁盘上造出"没说过话的
+    # 会话文件"）。现在 payload 里带的值才要设防：关掉工具时 normalize_messages 会
+    # 丢掉历史里的工具协议消息，等于静默截断历史，所以这里不信任客户端这一轮说的值。
+    if session_store.turn_count(SESSION_DIR, session_id) > 0:
+        recorded = session_store.load_settings(SESSION_DIR, session_id).get("toolsEnabled")
+        if recorded is not None and bool(payload.tools_enabled) != bool(recorded):
+            raise HTTPException(
+                status_code=409,
+                detail="这个对话已经说过了，工具开关不再可改 —— 请开新对话",
+            )
+
     # 工具干活的地方 = 这个工作区的根。工作区被删过（或 id 失效）时 resolve_workspace
     # 会回落到默认那个，不报错 —— 一场指向已删工作区的会话，还能继续用，落在默认根里。
     workspace_root = resolve_workspace(bound_workspace_id).get("root")

@@ -75,16 +75,6 @@ export async function deleteSession(sessionId) {
   return data;
 }
 
-// 会话级设置（是否使用工具）。它属于对话，不属于界面。
-export async function updateSessionSettings(sessionId, settings) {
-  const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(settings),
-  });
-  return response.json();
-}
-
 // 历史里还没说过话时服务端返回 404 —— 那是正常情况，不是错误。
 export async function fetchSessionItems(sessionId) {
   const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);

@@ -413,25 +413,38 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
           && !(root.textContent || "").includes("侧栏里的会话标题"));
   }
 
-  // 点一下开关：没锁的话应该把新状态 PATCH 回这场对话；锁了就不该发生任何写回。
-  // 只渲染不点的话，上面那条断言证明不了写回这条路是通的。
-  // 不去核对具体 id：新会话的 id 是当场随机生成的，抓不到。
+  // 点一下开关：**只改本地草稿，不写服务端**。
+  //
+  // 以前这里 PATCH /api/sessions/{id} 把开关存回会话，代价是"还没发消息就拨开关"
+  // 会在磁盘上造出一个只有 settings 记录、没有 header 的会话文件（侧栏里那个
+  // 永远停在"未分组"的 (空对话)）。现在这条 PATCH 整个删了 —— 所以断言的**反面**
+  // 才是重点：点开关不能产生任何网络写请求。
+  const patchedBefore = patched.length;
   toolsBox?.click();
   await new Promise((resolve) => setTimeout(resolve, 20));
-  const writeBack = patched.find((call) => /\/api\/sessions\/.+/.test(call.url));
-  let wroteTools = null;
-  try {
-    wroteTools = writeBack ? JSON.parse(writeBack.body).toolsEnabled : null;
-  } catch (error) {
-    wroteTools = "解析失败";
-  }
+  // 读草稿要包 try：场景 3 故意不给 url（不透明 origin），localStorage 会抛
+  // SecurityError —— 应用自己把它 catch 了，测试代码也得照做，否则测试先炸。
+  const draft = () => {
+    try {
+      return window.localStorage.getItem("chat.toolsEnabledDraft");
+    } catch (error) {
+      return null;
+    }
+  };
+  // 存储可不可用：场景 3 的 withUrl=false 就是在测"存储挂了也不能白屏"
+  const storageWorks = withUrl;
+  check("点开关不写服务端（不再是 PATCH）",
+        patched.length === patchedBefore,
+        `却发了 ${JSON.stringify(patched.slice(patchedBefore).map((c) => c.url))}`);
   if (expectLocked) {
-    check("锁了的对话，点开关不会写回", writeBack === undefined,
-          writeBack ? `却 PATCH 了 ${writeBack.url.replace(/^.*\/api/, "/api")}` : "");
-  } else {
-    check("点开关会把新状态写回这场对话",
-          wroteTools === !expectTools,
-          `PATCH ${writeBack ? writeBack.url.replace(/^.*\/api/, "/api") : "(没发生)"} body.toolsEnabled=${wroteTools}`);
+    // 说过话的对话：勾选框置灰，点了什么都不该发生 —— 不写服务端，也不留草稿
+    check("锁了的对话：开关置灰，点了不产生任何写入",
+          toolsBox?.disabled === true && patched.length === patchedBefore
+          && (!storageWorks || draft() === null),
+          `disabled=${toolsBox?.disabled} 草稿=${JSON.stringify(draft())}`);
+  } else if (storageWorks) {
+    check("开关状态存进了本地草稿（不落盘）",
+          draft() === (expectTools ? "0" : "1"), `实得 ${JSON.stringify(draft())}`);
   }
 
   if (pageErrors.length) {

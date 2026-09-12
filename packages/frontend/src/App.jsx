@@ -9,7 +9,6 @@ import {
   fetchSessions,
   fetchWorkspaces,
   sendChat,
-  updateSessionSettings,
 } from "./api";
 import { newSessionId, readStoredSessionId, writeStoredSessionId } from "./session";
 import { readStored, writeStored } from "./storage";
@@ -20,6 +19,10 @@ import SystemPanel from "./components/SystemPanel";
 
 const SIDEBAR_KEY = "chat.sidebarCollapsed";
 const WORKSPACE_KEY = "chat.workspaceId";
+// 还没开始那场对话的工具开关草稿。它属于**界面**状态：会话在第一次发消息之前
+// 不应该有文件（见 session_store.load_settings 那段注释），所以这个选择先存在本地，
+// 等第一条消息发出去时由 /api/chat 的 tools_enabled 带进那一轮的记录里。
+const TOOLS_DRAFT_KEY = "chat.toolsEnabledDraft";
 
 function createId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -168,7 +171,10 @@ export default function App() {
     if (!providersReady || loadedSettings === null) {
       return;
     }
-    applyToolsEnabled(Boolean(loadedSettings.toolsEnabled));
+    // 有记录的会话（说过话）以记录为准；新会话没有记录，用本地草稿 —— 这样
+    // "发第一条消息之前拨了开关、然后刷新页面"这个选择不会丢，也仍然不落盘。
+    const recorded = loadedSettings.toolsEnabled;
+    applyToolsEnabled(recorded === undefined ? readStored(TOOLS_DRAFT_KEY) === "1" : Boolean(recorded));
     setLoadedSettings(null);
   }, [providersReady, loadedSettings]);
 
@@ -340,8 +346,9 @@ export default function App() {
   function handleToolsToggle(event) {
     const next = event.target.checked;
     applyToolsEnabled(next);
-    // 存回这场对话 —— 切走再切回来时它跟着变回来。
-    updateSessionSettings(sessionId, { toolsEnabled: next }).catch(() => {});
+    // 只存本地草稿，**不写服务端**：写过话的会话由最后一轮的记录说了算（服务端也会
+    // 拒绝中途改），没写过话的会话本来就不该在磁盘上有文件。
+    writeStored(TOOLS_DRAFT_KEY, next ? "1" : "0");
   }
 
   function restoreDefaultSystemPrompt() {
