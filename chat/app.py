@@ -1,5 +1,7 @@
 import os
+import time
 from pathlib import Path
+from typing import NamedTuple
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -39,7 +41,15 @@ TOOL_SYSTEM_PROMPT = (
 )
 
 from llm_client import create_client, get_model_temperature, list_providers
-from llm_client.agent import run_agent_turn
+from llm_client.agent import run_agent_turn, write_trace
+
+
+class TurnResult(NamedTuple):
+    reply: str
+    steps: list
+    trace: list
+    messages: list       # 实际发给模型的消息（含拼好的 system），轨迹要记它
+    temperature: float   # 生效值：payload 没给时来自 providers.yaml
 
 
 class ChatMessage(BaseModel):
@@ -183,9 +193,40 @@ def normalize_messages(
     return normalized_messages
 
 
+def elapsed_ms(
+    started: float,
+    ) -> int:
+    return int((time.monotonic() - started) * 1000)
+
+
+def record_trace(
+    payload: ChatRequest,
+    duration_ms: int,
+    result: "TurnResult | None" = None,
+    error: str | None = None,
+    ) -> None:
+    """把一次请求写进轨迹文件。
+
+    刻意不 try/except：write_trace 自己就是 fail-soft 的（异常吞掉、只写 stderr），
+    所以这里再包一层只会掩盖问题。轨迹写不进去也绝不该弄死一次对话。
+    """
+    write_trace(
+        provider=payload.provider,
+        model_name=payload.model_name,
+        temperature=result.temperature if result else payload.temperature,
+        tools_enabled=payload.tools_enabled,
+        system_prompt=payload.system_prompt,
+        messages=result.messages if result else [],
+        steps=result.steps if result else [],
+        reply=result.reply if result else "",
+        duration_ms=duration_ms,
+        error=error,
+    )
+
+
 def request_real_reply(
     payload: ChatRequest,
-    ) -> tuple[str, list, list]:
+    ) -> "TurnResult":
     ensure_runtime_env(payload.provider)
     temperature = payload.temperature
     if temperature is None:
@@ -204,13 +245,21 @@ def request_real_reply(
         tools_enabled=payload.tools_enabled,
     )
     if payload.tools_enabled:
-        # agent 模式：多轮工具调用，直到模型直接回答；返回 (最终文本, 工具流水账)
-        return run_agent_turn(client, normalized_messages)
+        # agent 模式：多轮工具调用，直到模型直接回答
+        reply, steps, trace = run_agent_turn(client, normalized_messages)
+    else:
+        assistant_message, _ = client.request_assistant_message(
+            messages=normalized_messages,
+        )
+        reply, steps, trace = str(assistant_message["content"]), [], []
 
-    assistant_message, _ = client.request_assistant_message(
+    return TurnResult(
+        reply=reply,
+        steps=steps,
+        trace=trace,
         messages=normalized_messages,
+        temperature=temperature,
     )
-    return str(assistant_message["content"]), [], []
 
 
 @app.get("/")
@@ -247,10 +296,13 @@ def providers(
 def chat(
     payload: ChatRequest,
     ) -> ChatResponse:
+    started = time.monotonic()
     try:
-        reply, steps, trace = request_real_reply(payload)
+        result = request_real_reply(payload)
     except Exception as exc:
+        record_trace(payload, elapsed_ms(started), error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    return ChatResponse(reply=reply, steps=steps, trace=trace)
+    record_trace(payload, elapsed_ms(started), result=result)
+    return ChatResponse(reply=result.reply, steps=result.steps, trace=result.trace)
 
