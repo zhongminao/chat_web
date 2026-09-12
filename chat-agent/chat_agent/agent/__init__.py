@@ -6,8 +6,8 @@
     execute_tool    工具分发（工具名 + 参数 JSON 字符串 → 结果文本）
     write_trace     轨迹落盘（一次请求一个 JSONL 文件，供回看与 eval）
 """
-from llm_client.agent.loop import run_agent_turn
-from llm_client.agent.tools import TOOL_SCHEMAS, execute_tool
-from llm_client.agent.trace_log import write_trace
+from chat_agent.agent.loop import run_agent_turn
+from chat_agent.agent.tools import TOOL_SCHEMAS, execute_tool
+from chat_agent.agent.trace_log import write_trace
 
 __all__ = ["run_agent_turn", "TOOL_SCHEMAS", "execute_tool", "write_trace"]

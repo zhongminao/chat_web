@@ -10,7 +10,7 @@
 | `GPT_API_KEY` | `~/.bashrc` | `chat/app.py` → `load_env_value_from_bashrc()` |
 | `DEEPSEEK_API_KEY` | `~/.bashrc` | 同上 |
 | `LOCAL_QWEN_API_KEY` | `~/.bashrc` | 同上（本地 vLLM 无鉴权，占位值） |
-| `LOCAL_QWEN_BASE_URL` / `_MODEL_NAME` / `_MODEL_DIR` | shell 环境变量 | `llm_client/providers.yaml` 的 `base_url_env` / `model_name_env`；`start_local_qwen.sh` |
+| `LOCAL_QWEN_BASE_URL` / `_MODEL_NAME` / `_MODEL_DIR` | shell 环境变量 | `chat_agent/providers.yaml` 的 `base_url_env` / `model_name_env`；`start_local_qwen.sh` |
 | `FORTRIX_*` | `~/.config/fortrix/fortrix.env` | `fortrix.service` 的 `EnvironmentFile=` |
 | `authtoken` / 各隧道 `auth` | `/usr/local/etc/cpolar/cpolar.yml` | `cpolar.service` 的 `-config=` |
 

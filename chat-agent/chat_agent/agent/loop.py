@@ -8,7 +8,7 @@
   但会把本次新产生的协议消息放进 trace 返回，调用方可存下来跨请求回放，
   让模型下一轮仍能看到完整工具过程（assistant tool_calls + tool 结果对）。
 
-execute_tool 契约（由 llm_client/agent/tools.py 提供）：
+execute_tool 契约（由 chat_agent/agent/tools.py 提供）：
     execute_tool(name: str, arguments_raw: str) -> str
     arguments_raw 是模型返回的 JSON 字符串；结果/错误都以文本返回，不抛异常。
     因为是"以文本返回"，成败只能靠 tools.TOOL_ERROR_PREFIX 前缀区分 ——
@@ -30,7 +30,7 @@ def run_agent_turn(
     ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
     """跑完一轮 agent 任务。
 
-    client: llm_client 的 Client 实例（提供 request_assistant_message）。
+    client: chat_agent 的 Client 实例（提供 request_assistant_message）。
     messages: 完整的对话消息（第一条通常是 system，由调用方拼好）。
     tool_schemas: 工具说明书列表；None → 用 tools.TOOL_SCHEMAS。
     execute_tool: 执行回调；None → 用 tools.execute_tool。
@@ -46,7 +46,7 @@ def run_agent_turn(
         raise ValueError("max_rounds 必须 >= 1")
 
     # 延迟 import：避免循环依赖，也允许 tools.py 还在迭代时 loop.py 先存在
-    from llm_client.agent import tools as _tools
+    from chat_agent.agent import tools as _tools
 
     if tool_schemas is None:
         tool_schemas = _tools.TOOL_SCHEMAS

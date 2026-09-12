@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 # 轨迹落在仓库内的 traces/ 下（不进 git，见 .gitignore）—— 放在手边才找得到。
-# 位置由这里决定而不是 llm_client：那个包是独立可安装的，不该知道仓库布局。
+# 位置由这里决定而不是 chat_agent：那个包是独立可安装的，不该知道仓库布局。
 TRACE_DIR = BASE_DIR.parent / "traces"
 DEFAULT_PROVIDER = "gpt"
 DEFAULT_MODEL_NAME = "gpt-5.5"
@@ -24,7 +24,7 @@ DEFAULT_SYSTEM_PROMPT = (
 
 # 工具模式的系统提示词：告诉模型它可以调用工具、何时用哪个、有哪些行为规则。
 # 注意：不贴 JSON schema——工具定义走 API 的 tools 参数，这里只给可读的规则，
-# 避免与 llm_client/agent/tools.py 里的实现重复维护而漂移。
+# 避免与 chat_agent/agent/tools.py 里的实现重复维护而漂移。
 TOOL_SYSTEM_PROMPT = (
     "You are an agent that can take real actions through tools. "
     "Tools available: "
@@ -43,8 +43,8 @@ TOOL_SYSTEM_PROMPT = (
     "edited, or ran."
 )
 
-from llm_client import create_client, get_model_temperature, list_providers
-from llm_client.agent import run_agent_turn, write_trace
+from chat_agent import create_client, get_model_temperature, list_providers
+from chat_agent.agent import run_agent_turn, write_trace
 
 
 class TurnResult(NamedTuple):

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chat-agent"
+version = "0.1.0"
+description = "agent 运行时与 LLM 客户端：provider 目录 / 无状态 Client / 工具循环（含观测守卫、spill、轨迹落盘）；零项目依赖"
+requires-python = ">=3.10"
+dependencies = [
+    "openai>=1.0",
+    "pyyaml",
+]
+
+# 自动发现子包。曾经这里是 packages = ["chat_agent"] —— 显式列举不会递归带上
+# 子包，于是 chat_agent.agent 在非 editable 安装时整个丢失（wheel 里没有 agent/），
+# 而 chat/app.py 是模块级 from chat_agent.agent import run_agent_turn，
+# 后果是普通安装后 chat 服务直接起不来。改成 find 后新增子包不必再回来改这里。
+[tool.setuptools.packages.find]
+include = ["chat_agent*"]
+
+[tool.setuptools.package-data]
+chat_agent = ["providers.yaml"]

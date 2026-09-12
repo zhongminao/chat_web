@@ -12,13 +12,13 @@ import json
 import shutil
 from pathlib import Path
 
-from llm_client.agent import TOOL_SCHEMAS, execute_tool, run_agent_turn
+from chat_agent.agent import TOOL_SCHEMAS, execute_tool, run_agent_turn
 
 DEMO_FILE = Path("/tmp/agent_demo/hello.txt")
 
 
 class FakeClient:
-    """模拟 llm_client.Client：按脚本依次返回 assistant_message。
+    """模拟 chat_agent.Client：按脚本依次返回 assistant_message。
 
     真实 client 的 request_assistant_message 长一样：
     传入 (messages, tools)，返回 (assistant_message, metadata)。

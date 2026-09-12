@@ -24,7 +24,7 @@ DIR_ENV = "CHAT_TRACE_DIR"
 DISABLE_ENV = "CHAT_TRACE"
 # 只有在调用方没给目录、也没设环境变量时才用它。真正的落点由应用决定 ——
 # 这个库是独立可安装的包，不该知道"自己在一个叫 chat 的仓库里"。
-DEFAULT_DIR = Path.home() / ".local" / "state" / "llm-client" / "traces"
+DEFAULT_DIR = Path.home() / ".local" / "state" / "chat-agent" / "traces"
 
 # agent 能读到 ~/.bashrc / ~/.dsh/.credentials.yaml / fortrix.env，轨迹里会带上密钥。
 # DSH 靠权限门拦在前面，chat 没有门，所以在这里擦。
