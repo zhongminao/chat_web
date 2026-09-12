@@ -3,6 +3,8 @@ import json
 import subprocess
 from pathlib import Path
 
+from llm_client.agent.observed import guard as guard_mutation
+from llm_client.agent.observed import remember as remember_observed
 from llm_client.agent.spill import save as save_spill
 
 # 工具输出的内联上限。bash 按整体掐（超长另存 spill 文件）；read_file 按行分页，
@@ -62,7 +64,10 @@ EDIT_FILE_SCHEMA = {
             "Replace exactly one occurrence of old_text with new_text in a file. "
             "old_text must be copied character-for-character from the file "
             "(read_file first, never invent content), and must match exactly once; "
-            "errors tell you if it is missing or ambiguous."
+            "errors tell you if it is missing or ambiguous. You must have read the "
+            "file in this session, and it must be unchanged since that read — if it "
+            "changed on disk you will be told to re-read it, because your picture of "
+            "the file is then out of date."
         ),
         "parameters": {
             "type": "object",
@@ -123,7 +128,9 @@ WRITE_FILE_SCHEMA = {
             "Write content to a file. Creates the file if it does not exist, "
             "overwrites it if it does. Parent directories are created "
             "automatically. Use ONLY for new files or complete rewrites; for a "
-            "small targeted change in an existing file, use edit_file instead."
+            "small targeted change in an existing file, use edit_file instead. "
+            "Overwriting an existing file requires having read it in this session "
+            "and it being unchanged since that read."
         ),
         "parameters": {
             "type": "object",
@@ -184,12 +191,16 @@ def read_file(path:str,offset=1,limit=500)->str:
     chunk = lines[start:start+limit]
     end = start + len(chunk)
     body = "\n".join(_elide_line(line) for line in chunk)
+    remember_observed(path)
     result = f"[read_file] {path} ({total} lines total, showing lines {start + 1}-{end})\n{body}"
     if end < total:
         result += f"\n...[{total - end} more lines in file. Use offset={end + 1} to continue.]"
     return result
 
 def edit_file(path:str,old_text:str,new_text:str)->str:
+    reason = guard_mutation(path)
+    if reason:
+        raise ValueError(f"cannot edit {path}: {reason}")
     try:
         with open(path,"r",encoding="utf-8") as f:
             content = f.read()
@@ -205,6 +216,7 @@ def edit_file(path:str,old_text:str,new_text:str)->str:
     updated = content.replace(old_text,new_text,1)
     with open(path,"w",encoding="utf-8") as f:
         f.write(updated)
+    remember_observed(path)
     return f"[edit_file] '{old_text}' replaced with '{new_text}' in {path}"
 
 def _elide_middle(text:str,limit:int=BASH_OUTPUT_LIMIT)->str:
@@ -255,6 +267,9 @@ def run_bash(command:str,timeout:int=60)->str:
     return f"$ {command}\n{text}[exit code: {result.returncode}]{hint}"
 
 def write_file(path:str,content:str)->str:
+    reason = guard_mutation(path)
+    if reason:
+        raise ValueError(f"cannot write {path}: {reason}")
     p = Path(path)
     p.parent.mkdir(parents = True,exist_ok=True)
     try:
@@ -262,6 +277,7 @@ def write_file(path:str,content:str)->str:
             f.write(content)
     except OSError as exc:
         raise ValueError(f"write {p} failed: {exc}")
+    remember_observed(path)
     return f"[write_file] {p} written"
 
 # ---------------------------------------------------------------------------
