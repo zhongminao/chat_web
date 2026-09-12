@@ -12,21 +12,31 @@ from pydantic import BaseModel, Field
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
-# 运行时数据放在仓库内的 storage/ 下（不进 git，见 .gitignore）—— 放在手边才找得到。
+# 运行时数据（会话日志 + 工作区登记表）的位置。
+#
+# 以前是"跟着代码走"的：BASE_DIR.parent / "storage"。代码一挪（这次从仓库根挪进
+# packages/chat/），数据目录就跟着挪了 —— 表现是**历史对话凭空消失**（文件其实还在
+# 老地方），而且不报错。所以改成可以用 CHAT_STORAGE 钉死，默认值只当兜底：
+#   CHAT_STORAGE=<仓库>/storage  → 数据位置与代码位置解耦
+# 服务端在 systemd unit 里显式给了这个变量。
 # 位置由这里决定而不是 chat_agent：那个包是独立可安装的，不该知道仓库布局。
-STORAGE_DIR = BASE_DIR.parent / "storage"
+_env_storage = os.environ.get("CHAT_STORAGE")
+STORAGE_DIR = (
+    Path(_env_storage).expanduser().resolve() if _env_storage else BASE_DIR.parent / "storage"
+)
 SESSION_DIR = STORAGE_DIR / "sessions"   # 会话日志就是状态本身
 WORKSPACE_DIR = STORAGE_DIR              # 工作区登记表 workspaces.json 放这
 
 # 默认工作区的根 —— **也是将来沙箱的默认边界**。
 #
 # 工作区现在是**实体**（id / 名字 / 根路径，登记在 storage/workspaces.json），
-# 会话的 header 里记的是它的 id 引用而不是路径快照。这个常量只在启动时用来把
-# 默认工作区登记进去（幂等）。
+# 会话的 header 里记的是它的 id 引用而不是路径快照。这个常量只在**登记表还空着**时
+# 用来兜底登记一条（第一次跑），不再每次启动都往回加 —— 否则用户删掉的工作区
+# 一重启就复活。想钉死默认根就用 CHAT_WORKSPACE。
 #
-# 现在仍然**没有任何东西读它来限制访问** —— run_bash 还是 shell=True、能走到任何
-# 地方。登记表的意义是让"允许 agent 活动的根"这件事有落点：沙箱将来要判断的
-# 正是"目标路径在不在某个工作区的根下面"。
+# 现在仍然**没有任何东西读它来限制访问** —— 四个工具只是在它的根里操作（相对路径
+# 按它解析），绝对路径照样能走到任何地方。登记表的意义是让"允许 agent 活动的根"
+# 这件事有落点：沙箱将来要判断的正是"目标路径在不在某个工作区的根下面"。
 DEFAULT_WORKSPACE_ROOT = Path(os.environ.get("CHAT_WORKSPACE") or Path.cwd()).resolve()
 DEFAULT_PROVIDER = "gpt"
 DEFAULT_MODEL_NAME = "gpt-5.5"

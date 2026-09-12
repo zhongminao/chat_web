@@ -18,7 +18,7 @@
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 
-const STATIC_DIR = new URL("../chat/static/", import.meta.url);
+const STATIC_DIR = new URL("../chat/chat/static/", import.meta.url);
 const html = readFileSync(new URL("index.html", STATIC_DIR), "utf-8");
 const bundle = readFileSync(new URL("app.js", STATIC_DIR), "utf-8");
 
@@ -44,7 +44,7 @@ const storedItems = [
 /* 侧栏用的会话列表。 */
 const workspacePayload = {
   workspaces: [
-    { id: "ws-bc8da407", name: "chat", root: "/home/zhong/mydisk/tools/chat" },
+    { id: "ws-bc8da407", name: "chat", root: "/home/zhong/mydisk/tools/workbench" },
     { id: "ws-8c393341", name: "tmp", root: "/tmp" },
   ],
   default: "ws-bc8da407",
@@ -147,7 +147,7 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
       // 服务端删空了会把自己复活（保证至少有一个工作区可回落），stub 照做，
       // 否则会测出"一个工作区都不剩"这种真实服务端不会进入的状态。
       if (workspaces.length === 0) {
-        workspaces = [{ id: "ws-default", name: "chat", root: "/home/zhong/mydisk/tools/chat" }];
+        workspaces = [{ id: "ws-default", name: "chat", root: "/home/zhong/mydisk/tools/workbench" }];
       }
       return Promise.resolve({
         ok: true,
@@ -319,7 +319,7 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
     //
     // jsdom 不算外部样式表的布局，测不出"能不能看见"，所以退一步查样式表**文本**：
     // 保护的是"按钮被一条无条件 display:none 按死"这个具体错误。
-    const css = readFileSync(new URL("../chat/static/styles.css", import.meta.url), "utf-8");
+    const css = readFileSync(new URL("../chat/chat/static/styles.css", import.meta.url), "utf-8");
     // 注释要先剥掉：断言的是"没有这条规则"，而注释里正好会提到那个旧选择器。
     const cssRules = css.replace(/\/\*[\s\S]*?\*\//g, "");
     const rowActionBlock = cssRules.match(/\.row-action\s*\{([^}]*)\}/);

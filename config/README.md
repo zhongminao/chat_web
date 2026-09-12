@@ -7,10 +7,12 @@
 
 | 变量 / 键 | 真实文件（都在仓库外） | 读取方 |
 |---|---|---|
-| `GPT_API_KEY` | `~/.bashrc` | `chat/app.py` → `load_env_value_from_bashrc()` |
+| `GPT_API_KEY` | `~/.bashrc` | `packages/chat/chat/app.py` → `load_env_value_from_bashrc()` |
 | `DEEPSEEK_API_KEY` | `~/.bashrc` | 同上 |
 | `LOCAL_QWEN_API_KEY` | `~/.bashrc` | 同上（本地 vLLM 无鉴权，占位值） |
 | `LOCAL_QWEN_BASE_URL` / `_MODEL_NAME` / `_MODEL_DIR` | shell 环境变量 | `chat_agent/providers.yaml` 的 `base_url_env` / `model_name_env`；`start_local_qwen.sh` |
+| `CHAT_STORAGE` | `chat.service` 的 `Environment=`（**不是**密钥，写死在 unit 里） | `packages/chat/chat/app.py` —— 会话日志与工作区登记表放哪 |
+| `CHAT_WORKSPACE` | 同上 | 同上 —— 登记表空着时兜底登记的那个工作区根 |
 | `FORTRIX_*` | `~/.config/fortrix/fortrix.env` | `fortrix.service` 的 `EnvironmentFile=` |
 | `authtoken` / 各隧道 `auth` | `/usr/local/etc/cpolar/cpolar.yml` | `cpolar.service` 的 `-config=` |
 
@@ -19,6 +21,11 @@
 >
 > **chat 当前不对外**：cpolar 启动列表里已没有 chat8200，且 cpolar 是 disabled。
 > `cpolar.yml` 里 chat8200 那个块的 `auth` 只在重新对外演示时才起作用。
+
+`CHAT_STORAGE` / `CHAT_WORKSPACE` 不是密钥，所以直接写在 systemd unit 里，不塞进
+EnvironmentFile：它们是**路径**，改了能立刻看出问题，没必要藏起来。
+两者的默认值都是"跟着代码走"的（chat 包的同级目录 / 进程 cwd），代码一挪就会跟着
+挪 —— 所以 unit 里显式钉死，免得历史对话凭空"消失"。
 
 `~/.config/chat/chat.env` 是 chat.service 的可选 EnvironmentFile，**当前不存在** ——
 unit 用 `-` 前缀，文件缺失不影响启动。要加变量再创建它，不必改 unit。

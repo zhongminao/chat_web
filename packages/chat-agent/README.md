@@ -8,7 +8,7 @@ agent 运行时与 LLM 客户端（零项目依赖），提供：
 
 仅依赖 `openai` 和 `pyyaml`。
 
-本包与 chat 应用同处一个仓库（`tools/chat/chat-agent/`），但**仍是可独立安装的包**：
+本包与 chat 应用同处一个仓库（`tools/workbench/packages/chat-agent/`），但**仍是可独立安装的包**：
 把仓库和包两个边界分开 —— 合的是 git，不是包。理由见仓库根 `README.md`。
 
 项目目录名带**连字符**（`chat-agent`）是刻意的：若与包名 `chat_agent` 同名，仓库根就会
@@ -33,7 +33,7 @@ agent 运行时与 LLM 客户端（零项目依赖），提供：
 ### 方式一：editable 安装（开发/日常推荐）
 
 ```bash
-cd ~/mydisk/tools/chat/chat-agent
+cd ~/mydisk/tools/workbench/packages/chat-agent
 pip install -e .
 ```
 
