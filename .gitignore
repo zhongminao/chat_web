@@ -21,8 +21,7 @@ node_modules/
 
 # 运行时数据（轨迹、会话日志）。放仓库里是为了找得到，但**绝不能被跟踪** ——
 # 里面有对话原文和工具输出。这条是保险，别删。
-traces/
-sessions/
+storage/
 
 # 密钥与运行时配置：真实文件在 ~/.config/{chat,fortrix}/ 与 /usr/local/etc/cpolar/，
 # 仓库里只允许 *.env.example 模板。这条是保险，别删。

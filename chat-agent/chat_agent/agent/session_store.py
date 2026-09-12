@@ -101,28 +101,47 @@ def load_history(base_dir: Path | str, session_id: str) -> list[dict[str, Any]]:
     return history
 
 
-def derive_steps(history: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """从协议消息折出人类可读的工具流水账（不落盘，读时算）。"""
+def load_items(base_dir: Path | str, session_id: str) -> list[dict[str, Any]]:
+    """按**渲染顺序**折出这场对话：user / step / assistant 三类。
+
+    为什么不分别返回 messages 和 steps 两个平铺列表：那样前端恢复历史时对不上
+    位置 —— 工具步骤本来夹在"用户提问"和"最终回复"之间，两张平铺表拼不回原顺序。
+    这里直接给渲染序，前端照着 map 一遍就行。
+    """
     from chat_agent.agent.tools import TOOL_ERROR_PREFIX
 
-    pending: dict[str, dict[str, Any]] = {}
-    steps: list[dict[str, Any]] = []
-    for message in history:
-        for call in message.get("tool_calls") or []:
-            function = call.get("function") or {}
-            pending[str(call.get("id") or "")] = {
-                "tool": str(function.get("name") or ""),
-                "arguments": str(function.get("arguments") or ""),
-            }
-        if message["role"] == "tool":
-            entry = pending.pop(str(message.get("tool_call_id") or ""), None)
-            if entry is None:
-                continue
-            result = message.get("content") or ""
-            entry["result"] = result
-            entry["ok"] = not result.startswith(TOOL_ERROR_PREFIX)
-            steps.append(entry)
-    return steps
+    items: list[dict[str, Any]] = []
+    pending: dict[str, dict[str, str]] = {}
+
+    for record in read_records(base_dir, session_id):
+        record_type = record.get("type")
+        if record_type == "user":
+            items.append({"kind": "user", "content": record.get("content") or ""})
+        elif record_type == "assistant":
+            calls = record.get("tool_calls")
+            if calls:
+                # 只登记，不产出条目 —— 给人看的是随后那条工具结果，不是模型的调用意图
+                for call in calls:
+                    function = call.get("function") or {}
+                    pending[str(call.get("id") or "")] = {
+                        "tool": str(function.get("name") or ""),
+                        "arguments": str(function.get("arguments") or ""),
+                    }
+            else:
+                items.append({"kind": "assistant", "content": record.get("content") or ""})
+        elif record_type == "tool":
+            call = pending.pop(str(record.get("tool_call_id") or ""), {})
+            result = record.get("content") or ""
+            items.append(
+                {
+                    "kind": "step",
+                    "tool": call.get("tool", ""),
+                    "arguments": call.get("arguments", ""),
+                    "result": result,
+                    "ok": not result.startswith(TOOL_ERROR_PREFIX),
+                }
+            )
+    return items
 
 
 def append_turn(

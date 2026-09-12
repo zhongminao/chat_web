@@ -11,10 +11,11 @@ from pydantic import BaseModel, Field
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
-# 轨迹落在仓库内的 traces/ 下（不进 git，见 .gitignore）—— 放在手边才找得到。
+# 运行时数据放在仓库内的 storage/ 下（不进 git，见 .gitignore）—— 放在手边才找得到。
 # 位置由这里决定而不是 chat_agent：那个包是独立可安装的，不该知道仓库布局。
-TRACE_DIR = BASE_DIR.parent / "traces"
-SESSION_DIR = BASE_DIR.parent / "sessions"
+STORAGE_DIR = BASE_DIR.parent / "storage"
+TRACE_DIR = STORAGE_DIR / "traces"       # 无状态请求的轨迹
+SESSION_DIR = STORAGE_DIR / "sessions"   # 会话日志（会话模式下它就是状态）
 DEFAULT_PROVIDER = "gpt"
 DEFAULT_MODEL_NAME = "gpt-5.5"
 DEFAULT_TEMPERATURE = 0.2
@@ -346,22 +347,16 @@ def list_sessions(
 def get_session(
     session_id: str,
     ) -> dict:
-    """取一场会话，供前端渲染：对话消息 + 工具流水账（后者从日志折出来，不落盘）。"""
+    """取一场会话，供前端渲染。
+
+    返回的 items 已是**渲染顺序**（user / step / assistant 交替），前端照着 map
+    一遍即可 —— 分别给 messages 和 steps 两张平铺表会让工具步骤错位。
+    """
     safe_id = session_store.sanitize_id(session_id)
     if safe_id is None or not session_store.exists(SESSION_DIR, safe_id):
         raise HTTPException(status_code=404, detail="session not found")
 
-    history = session_store.load_history(SESSION_DIR, safe_id)
-    messages = [
-        {"role": message["role"], "content": message["content"]}
-        for message in history
-        if message["role"] in ("user", "assistant")
-    ]
-    return {
-        "id": safe_id,
-        "messages": messages,
-        "steps": session_store.derive_steps(history),
-    }
+    return {"id": safe_id, "items": session_store.load_items(SESSION_DIR, safe_id)}
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -380,11 +375,16 @@ def chat(
         result = request_real_reply(payload, prior_messages)
     except Exception as exc:
         if session_id is not None:
-            # 会话模式下日志就是状态，失败也要留痕（否则下一轮历史里少了这次提问）
+            # 失败时**不往历史里写 user 消息**：那条提问没有对应的回答，留在历史里
+            # 会让下一次重试把同一句话追加第二遍。失败只记在 turn 记录里
+            # （turn 不是历史类型，重放会跳过），内容放在 attempted 字段备查。
             session_store.append_turn(
                 SESSION_DIR, session_id,
-                user_messages=[message.model_dump() for message in payload.messages],
-                protocol=[], meta={"error": str(exc)},
+                user_messages=[], protocol=[],
+                meta={
+                    "error": str(exc),
+                    "attempted": [message.content for message in payload.messages],
+                },
             )
         else:
             record_trace(payload, elapsed_ms(started), error=str(exc))

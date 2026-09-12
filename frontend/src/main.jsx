@@ -34,6 +34,28 @@ function createId() {
    默认值，取到 1 已经够用，不至于踩到被拒的区间。 */
 const TEMPERATURE_CHOICES = [0, 0.2, 0.5, 0.7, 1];
 
+/* localStorage 的两个包装。**不能让存储失败把页面弄白**：
+   隐私模式、file:// 打开、浏览器禁用存储，这几种情况下直接访问 window.localStorage
+   会抛 SecurityError —— 而这个读取发生在 useState 的初始化里，抛出去就是整页空白。
+   读不到就当成"没有会话"，写不进就只活在内存里（这一场对话刷新后会丢，但页面能用）。 */
+const SESSION_KEY = "chat.sessionId";
+
+function readStoredSessionId() {
+  try {
+    return window.localStorage.getItem(SESSION_KEY);
+  } catch (error) {
+    return null;
+  }
+}
+
+function writeStoredSessionId(value) {
+  try {
+    window.localStorage.setItem(SESSION_KEY, value);
+  } catch (error) {
+    /* 存不下就算了，见上面 */
+  }
+}
+
 
 
 
@@ -57,7 +79,24 @@ function App() {
     React 机制管“存在哪”和“怎么更新”（状态表）。
   */}
   const [messages, setMessages] = useState([]);
-  const [protocol, setProtocol] = useState([]);   // 协议历史：发给后端的真实消息（含 tool 回放）
+  /* 会话 id —— **历史现在归服务端管，前端只拿一个 id**。
+     以前这里是 protocol：前端持有全部真实消息（含 assistant(tool_calls) + tool 结果的
+     成对消息），每轮把整段历史重发一遍。两个后果：刷新页面全丢；历史越长每轮抄得越多。
+
+     现在：id 存在 localStorage（刷新不丢对话）；每轮只发本轮新增的那条消息，
+     历史由服务端从会话日志重放。换新对话 = 换一个新 id（见 clearMessages）。
+
+     id 会被服务端当文件名用，所以格式受限（字母数字加连字符/下划线），
+     前缀写成 web- 是为了在 storage/sessions/ 里一眼看出是浏览器建的。 */
+  const [sessionId, setSessionId] = useState(() => {
+    const saved = readStoredSessionId();
+    if (saved) {
+      return saved;
+    }
+    const fresh = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    writeStoredSessionId(fresh);
+    return fresh;
+  });
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [providers, setProviders] = useState([]);
@@ -114,6 +153,43 @@ function App() {
         吃饭(烤肉, [])，吃饭 函数看到第二个参数是空数组，就决定“只给你上一盘烤肉，后面不再加了”
       
   */}
+  /* ---- 挂载时把这场对话从服务端拉回来（新增）----
+     这就是"刷新不丢对话"。以前历史只活在这个页面的内存里，刷新即空。
+     与上面那个 providers 的 effect 分开写：两件事互不依赖，合在一起会让任一个失败
+     都拖累另一个（providers 挂了不该导致历史也读不出来）。
+
+     404 是正常情况：这场会话还没说过话，服务端没有这个文件 —— 不是错误。
+     items 已经按渲染顺序给好了（user / step / assistant 交替），照着 map 一遍即可。 */
+  useEffect(() => {
+    let cancelled = false;   // 卸载后别再 setState，否则 React 会警告
+    fetch(`/api/sessions/${encodeURIComponent(sessionId)}`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        if (cancelled || !data) {
+          return;
+        }
+        const restored = (data.items || []).map((item) => {
+          if (item.kind === "user") {
+            return { id: createId(), role: "user", content: item.content };
+          }
+          if (item.kind === "step") {
+            return {
+              id: createId(),
+              role: "tool-step",
+              tool: item.tool,
+              result: item.result,
+              ok: item.ok,
+            };
+          }
+          return { id: createId(), role: "assistant", content: item.content };
+        });
+        setMessages(restored);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
   /* ---- 弹出菜单的关闭行为（新增）----
      原生 <select> 这两件事是白送的，换成自绘按钮就得自己写，这是这次改动的主要代价。
        点菜单外面 → 关掉并退回到一级菜单
@@ -208,12 +284,10 @@ function App() {
       role: "user",
       content,
     };
-    const userProtocol = { role: "user", content };   // 协议历史里只存纯对话消息
 
     const nextMessages = [...messages, userMessage];
     {/*复制旧的全部，再加一个新东西在最后 */}
     setMessages(nextMessages);
-    setProtocol((p) => [...p, userProtocol]);
     setInput("");
     setIsLoading(true);
 
@@ -224,10 +298,10 @@ function App() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          // 完整协议回放：protocol 里保存了历史所有真实消息，
-          // 包括 assistant(tool_calls) + tool 结果的成对消息；
-          // 后端原样透传给模型 → 模型跨轮能看到上轮完整的工具过程。
-          messages: protocol.concat(userProtocol),
+          // 会话模式：**只发本轮新增的这一条**。历史由服务端从会话日志重放 ——
+          // 所以这里不能再发 protocol（那会让服务端把整段历史又追加一遍）。
+          messages: [userMessage],
+          sessionId,
           provider,
           model_name: modelName,
           system_prompt: systemPrompt,      // ← 新增
@@ -263,10 +337,9 @@ function App() {
       newItems.push(assistantMessage);
 
       setMessages((currentMessages) => [...currentMessages, ...newItems]);
-      // 协议历史追加本次运行产生的完整协议消息（trace），下一轮原样回放
-      if (data.trace && data.trace.length) {
-        setProtocol((p) => [...p, ...data.trace]);
-      }
+      // 这里以前还要把 data.trace 追加进 protocol 供下轮回放。
+      // 会话模式下服务端自己记了，前端不再持有协议历史 —— 那段代码连同 protocol
+      // 状态一起删掉了。
     } catch (error) {
       const assistantMessage = {
         id: createId(),
@@ -274,7 +347,8 @@ function App() {
         content: `请求失败：${error.message}`,
       };
 
-      // 失败轮不污染协议历史：错误气泡只进展示，不回放给模型
+      // 失败轮只进展示。服务端那边也不把这次提问写进历史（否则重试会追加第二遍），
+      // 所以重试是干净的。
       setMessages((currentMessages) => [...currentMessages, assistantMessage]);
     } finally {
       setIsLoading(false);
@@ -294,8 +368,13 @@ function App() {
   }
 
   function clearMessages() {
+    // 清空对话 = **换一场新会话**。旧的那场仍然留在服务端的 storage/sessions/ 里
+    // （轨迹一直都在，只是换了个 id 继续写），所以这一步是可逆的：把 localStorage
+    // 里的 chat.sessionId 换回旧值刷新，旧对话就回来了。
+    const fresh = `web-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    writeStoredSessionId(fresh);
+    setSessionId(fresh);
     setMessages([]);
-    setProtocol([]);   // 清空对话 = 清空展示 + 清空协议历史
   }
 
   // 工具模式开关：勾选时把"工具说明 + 当前提示词"拼进面板（看得见的拼接，不是后端黑盒），
