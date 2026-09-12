@@ -149,7 +149,7 @@ localhost，在应用眼里和局域网设备完全一样。
 ## agent 路线图（按序勿跳步）
 
 1. ~~轨迹落盘~~ 已完成
-2. ~~eval harness + 基线~~ 已完成（`evals/agent/`，用法见下）—— 之后每步都拿它的数字当裁判
+2. ~~评估用例 + 第一份基线~~ 已完成（`evals/agent/`，用法见下）—— 之后每步都拿它的数字当裁判
 3. **planning + 可见 UI** ← **下一步从这里开始**
 4. `read_file` 输出总量预算 + 步边界进度反馈
    （挪到规划**之后**：多步任务才真正会撞输出上限；"进度"也只有有了计划才有意义）
@@ -187,7 +187,12 @@ cd packages/frontend && pnpm run check                  # 前端产物 + smoke
 python evals/agent/run.py --runs 2                      # 基线：应该 4/4
 ```
 
-### 附：评估 harness 怎么用（第 2 步的产物）
+### 附：评估怎么用（第 2 步的产物）
+
+> **三层别混**：DSH 那个 harness 是**跑 agent 的平台**（agent 在里面跑）；
+> `packages/chat/src/chat/agent/` 是**我们这个 agent 本身**；`evals/agent/` 是**测它的东西**
+> —— 从外面把 agent 跑起来、判对错，没有一行参与 agent 运行。这里刻意不叫 harness，
+> 免得跟 DSH 的用法撞车。
 
 判据是**世界变成什么样**，不是回复像不像。一个 case = `task.txt`（给模型的一句话）
 + `fixture/`（初始目录）+ `check.sh`（判定，在 case 的临时目录里跑，退出码 0 才算过）。
