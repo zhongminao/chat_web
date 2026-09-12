@@ -11,6 +11,9 @@ from pydantic import BaseModel, Field
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
+# 轨迹落在仓库内的 var/ 下（不进 git，见 .gitignore）—— 放在手边才找得到。
+# 位置由这里决定而不是 llm_client：那个包是独立可安装的，不该知道仓库布局。
+TRACE_DIR = BASE_DIR.parent / "var" / "traces"
 DEFAULT_PROVIDER = "gpt"
 DEFAULT_MODEL_NAME = "gpt-5.5"
 DEFAULT_TEMPERATURE = 0.2
@@ -221,6 +224,7 @@ def record_trace(
         reply=result.reply if result else "",
         duration_ms=duration_ms,
         error=error,
+        directory=TRACE_DIR,
     )
 
 

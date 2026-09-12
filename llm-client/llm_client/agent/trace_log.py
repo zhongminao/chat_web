@@ -22,7 +22,9 @@ from typing import Any
 VERSION = 1
 DIR_ENV = "CHAT_TRACE_DIR"
 DISABLE_ENV = "CHAT_TRACE"
-DEFAULT_DIR = Path.home() / ".local" / "state" / "chat" / "traces"
+# 只有在调用方没给目录、也没设环境变量时才用它。真正的落点由应用决定 ——
+# 这个库是独立可安装的包，不该知道"自己在一个叫 chat 的仓库里"。
+DEFAULT_DIR = Path.home() / ".local" / "state" / "llm-client" / "traces"
 
 # agent 能读到 ~/.bashrc / ~/.dsh/.credentials.yaml / fortrix.env，轨迹里会带上密钥。
 # DSH 靠权限门拦在前面，chat 没有门，所以在这里擦。
@@ -63,10 +65,11 @@ def _redact_obj(value: Any) -> Any:
     return value
 
 
-def _new_path() -> Path:
+def _new_path(directory: Path | None = None) -> Path:
     now = datetime.now()
     name = f"{now.strftime('%H%M%S')}-{uuid.uuid4().hex[:6]}.jsonl"
-    return trace_dir() / now.strftime("%Y-%m-%d") / name
+    base = Path(directory).expanduser() if directory is not None else trace_dir()
+    return base / now.strftime("%Y-%m-%d") / name
 
 
 def write_trace(
@@ -81,13 +84,14 @@ def write_trace(
     reply: str,
     duration_ms: int,
     error: str | None = None,
+    directory: Path | None = None,
     ) -> Path | None:
     """记一次请求。返回落盘路径；被禁用或失败时返回 None。"""
     if os.environ.get(DISABLE_ENV, "").strip().lower() in {"0", "false", "no", "off"}:
         return None
 
     try:
-        path = _new_path()
+        path = _new_path(directory)
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
 
         seq = 0
