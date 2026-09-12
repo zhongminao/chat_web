@@ -13,7 +13,7 @@ systemctl --user restart chat  # 以服务常驻时；日志见 journalctl --use
 - 模型目录：`chat_agent/providers.yaml`，改完**不用重启**（每次请求重读）
 - `static/theme/` 是 DSH 上游 token 的逐字拷贝（MIT，许可见其中的 `LICENSE`，别删）。
   **别手改** —— 配色改 `styles.css`，或在自己的表里覆盖同名变量
-- 鉴权不在本进程：公网密码由 cpolar 边缘负责，局域网直连免密码。应用层区分不出来源，
-  所以这件事不在这里做
-- 智能体能力演进（轨迹落盘 → eval → 沙箱 → 压缩 → planning → search）：
-  见 `chat_agent/README.md` 的「智能体路线图」
+- 鉴权不在本进程：chat 当前只在局域网可达、**没有密码**（公网入口已撤）。应用层区分
+  不出来源，所以这件事不在这里做。要对外时把 chat8200 加回 cpolar 的启动列表
+- 智能体能力演进（轨迹落盘 → eval → 进度反馈 → 沙箱 → 注册表 → 压缩 → planning → search）：
+  见 `chat-agent/README.md` 的「智能体路线图」

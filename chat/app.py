@@ -81,10 +81,11 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # 鉴权**不在这个进程里**做。
 #
-# 公网入口的密码由 cpolar 边缘负责（/usr/local/etc/cpolar/cpolar.yml 里的 auth 项），
-# 局域网直连 8200 则完全不需要密码 —— 这正是想要的效果：公网要密码，局域网不要。
+# 现状：chat 只在局域网可达（8200 直连）。**公网入口已撤掉** —— cpolar 的启动列表里
+# 不再有 chat8200，且 cpolar 本身是 disabled。要对外演示（给 hr 看）时，把 chat8200
+# 加回 cpolar.service 的 ExecStart，密码由那一层的 auth 负责。
 #
-# 为什么不能在这里做：应用层分不清「公网来的」和「局域网来的」。cpolar 客户端
+# 为什么密码不放在应用层：应用层分不清「公网来的」和「局域网来的」。cpolar 客户端
 # 跑在本机、连的是 localhost:8200，局域网设备也连同一个端口，两者在应用眼里长得
 # 一样；靠来源 IP 判断会被 X-Forwarded-For 缺失（退化成 127.0.0.1，看起来正好像
 # 局域网）绕过，靠 Host 头判断则可以直接伪造。只有放在 cpolar 边缘才是结构性的：
@@ -92,7 +93,10 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 #
 # 2026-09-11 这里曾挂过一个 BasicAuthMiddleware（chat/basic_auth.py，66 行），
 # 现已删除 —— 它的活由 cpolar 接管了，留着就是挂着不执行的死代码。
-# 真需要应用层密码时（比如换隧道方式、或要直接暴露端口），见 git 历史取回。
+#
+# 因此当前**没有密码**：安全性完全建立在"只有局域网连得上"之上。换通道（如 ssh
+# 端口转发 + 密钥）时，鉴权责任随之转移到那条通道；若直接把 8200 暴露出去，
+# 就必须把应用层鉴权加回来。
 
 
 def load_env_value_from_bashrc(

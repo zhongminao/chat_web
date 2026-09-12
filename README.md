@@ -80,4 +80,7 @@ ss -ltnp '( sport = :8200 )'
   agent 能力演进路线图见 `chat-agent/README.md`
 - 密钥与运行时配置**不进仓库**：真实文件在 `~/.config/{chat,fortrix}/` 与
   `/usr/local/etc/cpolar/cpolar.yml`，仓库里连模板都不放。变量 → 文件的映射表见
-  `config/README.md`（**chat 的公网密码在 cpolar.yml 里，不在 chat 进程里**）
+  `config/README.md`
+- **chat 当前不对外**：cpolar 启动列表里已没有 chat8200，cpolar 本身也是 disabled。
+  只在局域网可达，因此**没有密码** —— 安全性建立在"只有局域网连得上"。要对外演示
+  时把 chat8200 加回 cpolar.service 的 ExecStart

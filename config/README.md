@@ -14,16 +14,23 @@
 | `FORTRIX_*` | `~/.config/fortrix/fortrix.env` | `fortrix.service` 的 `EnvironmentFile=` |
 | `authtoken` / 各隧道 `auth` | `/usr/local/etc/cpolar/cpolar.yml` | `cpolar.service` 的 `-config=` |
 
-> **chat 的公网密码在最后一行那个文件里**，不在 chat 进程里。最后两行是同机的另外两个
-> 服务，与本仓库无关 —— 列出来只是因为它们与 chat 共用 cpolar，排查时最容易混。
+> 最后两行是同机的另外两个服务，与本仓库无关 —— 列出来只是因为它们历史上与 chat
+> 共用 cpolar，排查时最容易混。
+>
+> **chat 当前不对外**：cpolar 启动列表里已没有 chat8200，且 cpolar 是 disabled。
+> `cpolar.yml` 里 chat8200 那个块的 `auth` 只在重新对外演示时才起作用。
 
 `~/.config/chat/chat.env` 是 chat.service 的可选 EnvironmentFile，**当前不存在** ——
 unit 用 `-` 前缀，文件缺失不影响启动。要加变量再创建它，不必改 unit。
 
-## 为什么公网密码不在应用里
+## chat 现在没有密码
 
-公网请求必经 cpolar 边缘 → 被挡；局域网直连 8200 不经过它 → 免密。应用层分不清请求
-来源（cpolar 客户端连的是 localhost，和局域网设备在应用眼里一样），只能放在边缘做。
+局域网直连 8200 不需要密码；公网入口撤掉之后，也就没有"公网要密码"这回事了。
+安全性完全建立在"只有局域网连得上"之上。
+
+将来要对外演示，把 chat8200 加回 `cpolar.service` 的 ExecStart，密码就由那一层的
+`auth` 负责 —— 为什么不放在应用层：应用层分不清请求来源（cpolar 客户端连的是
+localhost，和局域网设备在应用眼里一样），只有边缘那一层才是结构性的。
 
 ## 新增配置时
 
