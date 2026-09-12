@@ -98,6 +98,9 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
   check("标题渲染出来", text.includes("AI 聊天助手"));
   check("输入框存在", !!window.document.querySelector("textarea, input[type=text]"));
   check("请求了供应商目录", fetchCalls.some((u) => u.includes("/api/providers")));
+  // 覆盖 providers -> state -> 渲染 这条链：接口回来了要真的显示到 chip 上
+  check("模型 chip 显示出接口返回的模型名", text.includes("DeepSeek Flash"));
+  check("发送按钮在", !!window.document.querySelector("button[type=submit]"));
 
   if (pageErrors.length) {
     console.log("  --- 页面报错 ---");
