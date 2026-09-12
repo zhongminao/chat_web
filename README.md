@@ -5,7 +5,7 @@ React + FastAPI 聊天应用：前端负责展示和提交对话，后端通过 
 ## 目录
 
 ```
-tools/workbench/                 # 仓库根（git 就在这一层）
+tools/chat/                 # 仓库根（git 就在这一层）
 ├── README.md                  # 本文件
 ├── .gitignore
 ├── packages/                  # 一个个可独立安装/构建的项目，各自带自己的清单
@@ -60,8 +60,8 @@ Node 工具链）。三者用不同的工具链，但改动经常跨项目（age
 ## 启动
 
 ```bash
-pip install -e ~/mydisk/tools/workbench/packages/chat        # chat 应用
-pip install -e ~/mydisk/tools/workbench/packages/chat-agent  # chat-agent 库（装一次即可）
+pip install -e ~/mydisk/tools/chat/packages/chat        # chat 应用
+pip install -e ~/mydisk/tools/chat/packages/chat-agent  # chat-agent 库（装一次即可）
 python -m chat [port]                         # 任意目录下启动，默认端口 8200
 ```
 
@@ -104,8 +104,8 @@ ss -ltnp '( sport = :8200 )'
 
 ## 说明
 
-- `~/mydisk/web/chat` 是软链接，指向本目录（`tools/chat` 这个旧名字的兼容入口；
-  目录改名为 `workbench` 时已重新指过来，别再留指向旧路径的链接）
+- `~/mydisk/web/chat` 是软链接，指向本目录（旧路径的兼容入口）。**移动/改名仓库时要
+  记得一起改** —— 它不跟着 git 走，改名那次就断过一次
 - git 历史已随迁移保留（`.git` 在仓库根，跟着目录一起走）
 - `chat_agent` 前身叫 `llm_client`，原先在 `tools/llm_client`（**无 git**）。2026-09-12 并入
   本仓库，随后改名 `chat_agent` —— 此后一个仓库维护两个包。

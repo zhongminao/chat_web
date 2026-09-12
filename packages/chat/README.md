@@ -4,7 +4,7 @@ React + FastAPI 的 AI 聊天应用。后端 `app.py` 经 chat-agent 调 LLM；�
 `frontend/`，由 esbuild 打包成 `static/app.js`（约 150KB），本目录的 FastAPI 直接发。
 
 ```bash
-pip install -e ~/mydisk/tools/workbench/packages/chat
+pip install -e ~/mydisk/tools/chat/packages/chat
 python -m chat                 # http://127.0.0.1:8200
 systemctl --user restart chat  # 以服务常驻时；日志见 journalctl --user -u chat -f
 ```

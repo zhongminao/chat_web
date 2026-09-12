@@ -44,7 +44,7 @@ const storedItems = [
 /* 侧栏用的会话列表。 */
 const workspacePayload = {
   workspaces: [
-    { id: "ws-bc8da407", name: "chat", root: "/home/zhong/mydisk/tools/workbench" },
+    { id: "ws-bc8da407", name: "chat", root: "/home/zhong/mydisk/tools/chat" },
     { id: "ws-8c393341", name: "tmp", root: "/tmp" },
   ],
   default: "ws-bc8da407",
@@ -147,7 +147,7 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
       // 服务端删空了会把自己复活（保证至少有一个工作区可回落），stub 照做，
       // 否则会测出"一个工作区都不剩"这种真实服务端不会进入的状态。
       if (workspaces.length === 0) {
-        workspaces = [{ id: "ws-default", name: "chat", root: "/home/zhong/mydisk/tools/workbench" }];
+        workspaces = [{ id: "ws-default", name: "chat", root: "/home/zhong/mydisk/tools/chat" }];
       }
       return Promise.resolve({
         ok: true,
