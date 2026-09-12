@@ -74,8 +74,8 @@ def resolve_provider_config(
     """按 providers.yaml 解析单个请求的 api_key / base_url / model_name。
 
     - api_key: 优先环境变量 api_key_env，其次 api_key_default，都没有则为空
-    - base_url: 设置 base_url_env 时优先读环境变量，否则用 yaml 的 base_url
-    - model_name: 请求参数 > model_name_env 环境变量 > default_model > 列表第一个
+    - base_url: yaml 里的 base_url（唯一来源）
+    - model_name: 请求参数 > default_model > models 列表第一个
     """
     entry = _provider_entry(provider)
 
@@ -84,11 +84,6 @@ def resolve_provider_config(
         api_key = entry.get("api_key_default")
 
     base_url = entry.get("base_url")
-    if entry.get("base_url_env"):
-        base_url = os.getenv(entry["base_url_env"]) or base_url
-
-    if not model_name and entry.get("model_name_env"):
-        model_name = os.getenv(entry["model_name_env"])
 
     if not model_name:
         models = entry.get("models") or []
