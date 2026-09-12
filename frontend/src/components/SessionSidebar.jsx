@@ -10,6 +10,7 @@ import {
   IconTrashOutline16,
 } from "../icons";
 import DirectoryPicker from "./DirectoryPicker";
+import ConfirmDialog from "./ConfirmDialog";
 
 // 月日 + 时刻。原先当天只显示时刻、跨天只有一个 MM-DD —— 分不清哪天几点。
 function formatTime(ms) {
@@ -39,6 +40,7 @@ export default function SessionSidebar({
   onSelectWorkspace,
   onAddWorkspace,
   onRemoveWorkspace,
+  onRemoveSession,
   onSelect,
   onNew,
 }) {
@@ -47,6 +49,9 @@ export default function SessionSidebar({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState({});
+  // 待确认的删除：{kind: "session"|"workspace", ...}。非空时弹确认框。
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
   const searchRef = useRef(null);
 
   const keyword = query.trim();
@@ -90,14 +95,48 @@ export default function SessionSidebar({
     }
   }, [searchOpen]);
 
-  async function removeWorkspace(event, entry) {
+  async function removeWorkspace(event, entry, sessionCount) {
     event.stopPropagation();   // 别冒泡成"选中这个工作区"
-    try {
-      await onRemoveWorkspace(entry.id);
-      setError("");
-    } catch (removeError) {
-      setError(removeError.message);
+    // 里面有对话就先问：会话日志是那些对话的唯一载体，删了没有回收站。
+    // 空工作区没有不可撤销的后果，直接删 —— 不该为它多点一次。
+    if (sessionCount > 0) {
+      setPendingDelete({ kind: "workspace", entry, count: sessionCount });
+      return;
     }
+    await runDelete(() => onRemoveWorkspace(entry.id, { withSessions: false }));
+  }
+
+  // 删一场对话：**一律先确认**。它删的是这场对话的全部历史，没有回收站。
+  function askRemoveSession(event, session) {
+    event.stopPropagation();   // 别冒泡成"切到这场对话"
+    setPendingDelete({ kind: "session", session });
+  }
+
+  async function runDelete(action) {
+    setDeleting(true);
+    try {
+      await action();
+      setError("");
+    } catch (deleteError) {
+      setError(deleteError.message);
+    } finally {
+      setDeleting(false);
+      setPendingDelete(null);
+    }
+  }
+
+  function confirmDelete() {
+    if (!pendingDelete) {
+      return;
+    }
+    if (pendingDelete.kind === "session") {
+      return runDelete(() => onRemoveSession(pendingDelete.session.id));
+    }
+    return runDelete(() =>
+      onRemoveWorkspace(pendingDelete.entry.id, {
+        withSessions: pendingDelete.count > 0,
+      })
+    );
   }
 
   async function confirmAdd(root) {
@@ -256,7 +295,9 @@ export default function SessionSidebar({
                       <button
                         type="button"
                         className="row-action"
-                        onClick={(event) => removeWorkspace(event, group.workspace)}
+                        onClick={(event) =>
+                          removeWorkspace(event, group.workspace, group.sessions.length)
+                        }
                         aria-label={`删除工作区 ${group.workspace.name}`}
                         title="删除这个工作区（里面还有对话就删不了）"
                       >
@@ -268,20 +309,37 @@ export default function SessionSidebar({
 
                 {isOpen
                   ? group.sessions.map((session) => (
-                      <button
+                      // 外层是 div 不是 button：主按钮旁边还要放删除按钮，而 button
+                      // 不能再套 button（HTML 不允许）。结构照搬组头：主按钮 + 动作簇。
+                      <div
                         key={session.id}
-                        type="button"
                         className={
-                          session.id === activeId ? "session-item is-active" : "session-item"
+                          session.id === activeId ? "session-row is-active" : "session-row"
                         }
-                        onClick={() => onSelect(session)}
-                        title={session.title}
                       >
-                        <span className="session-item-title">{session.title}</span>
-                        <span className="session-item-meta">
-                          {session.turns} 轮 · {formatTime(session.lastActivity)}
-                        </span>
-                      </button>
+                        <button
+                          type="button"
+                          className="session-item"
+                          onClick={() => onSelect(session)}
+                          title={session.title}
+                        >
+                          <span className="session-item-title">{session.title}</span>
+                          <span className="session-item-meta">
+                            {session.turns} 轮 · {formatTime(session.lastActivity)}
+                          </span>
+                        </button>
+                        <div className="session-actions">
+                          <button
+                            type="button"
+                            className="row-action"
+                            onClick={(event) => askRemoveSession(event, session)}
+                            aria-label={`删除对话 ${session.title}`}
+                            title="删除这场对话"
+                          >
+                            <IconTrashOutline16 size={14} />
+                          </button>
+                        </div>
+                      </div>
                     ))
                   : null}
               </section>
@@ -297,6 +355,29 @@ export default function SessionSidebar({
         open={pickerOpen}
         onClose={() => setPickerOpen(false)}
         onConfirm={confirmAdd}
+      />
+
+      {/* 两种删除共用同一个确认框：都是"删了找不回来"的事，文案说清删的是什么。 */}
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title={
+          pendingDelete?.kind === "session"
+            ? "删除这场对话？"
+            : `删除工作区「${pendingDelete?.entry?.name || ""}」？`
+        }
+        message={
+          pendingDelete?.kind === "session"
+            ? `「${pendingDelete.session.title}」共 ${pendingDelete.session.turns} 轮，删了找不回来。`
+            : `里面还有 ${pendingDelete?.count || 0} 场对话，会一起删掉，删了找不回来。工作区对应的目录不会被删。`
+        }
+        confirmLabel={
+          pendingDelete?.kind === "session"
+            ? "删除这场对话"
+            : `删除工作区与 ${pendingDelete?.count || 0} 场对话`
+        }
+        busy={deleting}
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
       />
     </aside>
   );

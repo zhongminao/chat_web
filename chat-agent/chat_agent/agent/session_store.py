@@ -268,6 +268,24 @@ def load_workspace_id(base_dir: Path | str, session_id: str) -> str | None:
     return None
 
 
+def delete_session(base_dir: Path | str, session_id: str) -> bool:
+    """删掉一场会话的日志文件。删掉了返回 True，本来就不在返回 False。
+
+    日志是这场会话的**唯一**载体（没有数据库、没有索引），所以删文件就是删会话，
+    删完没有回收站。调用方必须先让用户确认过。
+
+    id 先过 sanitize_id：它是要拼进路径的，没校验就能被 "../" 带出去删到别的文件。
+    """
+    safe_id = sanitize_id(session_id)
+    if safe_id is None:
+        return False
+    try:
+        session_file(base_dir, safe_id).unlink()
+    except OSError:
+        return False
+    return True
+
+
 def turn_count(base_dir: Path | str, session_id: str) -> int:
     return sum(1 for record in read_records(base_dir, session_id) if record.get("type") == "turn")
 

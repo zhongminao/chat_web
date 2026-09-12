@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 
 import {
   createWorkspace,
+  deleteSession,
   deleteWorkspace,
   fetchProviders,
   fetchSessionItems,
@@ -282,14 +283,38 @@ export default function App() {
     return entry;
   }
 
-  async function removeWorkspace(targetWorkspaceId) {
-    const data = await deleteWorkspace(targetWorkspaceId);
+  // 删工作区。里面还有对话时调用方（侧栏的确认框）会带 withSessions —— 服务端默认
+  // 拒绝删非空工作区，必须显式说要连对话一起删，那是不可撤销的。
+  //
+  // 删完必须重取会话列表：少了这一步，刚被删掉的对话还留在界面上，而且因为它们的
+  // 工作区没了会掉进"未分组"继续显示 —— 看着像没删掉。
+  async function removeWorkspace(targetWorkspaceId, { withSessions = false } = {}) {
+    const data = await deleteWorkspace(targetWorkspaceId, { withSessions });
     setWorkspaces(data.workspaces || []);
-    // 删掉的正是当前这个 -> 落到默认那个（服务端保证至少还剩一个）。
+
+    // 当前开着的这场对话就在被删的里面 -> 换一场新会话。不换的话界面还停在一场
+    // 已经不存在的对话上，下一轮会往一个没了的日志文件里写。
+    const open = sessions.find((session) => session.id === sessionId);
+    if (withSessions && open?.workspaceId === targetWorkspaceId) {
+      clearMessages();
+    }
+
+    // 删掉的正是当前工作区 -> 落到服务端给的默认那个（它保证至少还剩一个）。
     if (targetWorkspaceId === workspaceId && data.default) {
       selectWorkspace(data.default);
     }
+    await refreshSessions();
     return data;
+  }
+
+  // 删一场对话。日志文件就是它的全部历史，没有回收站，所以侧栏那边一律先确认。
+  async function removeSession(targetSessionId) {
+    await deleteSession(targetSessionId);
+    // 删的正是当前这场 -> 换一场新会话，别停在已经不存在的对话上。
+    if (targetSessionId === sessionId) {
+      clearMessages();
+    }
+    await refreshSessions();
   }
 
   // 工具模式开关：开时把工具说明拼进面板（看得见的拼接，不是后端黑盒），
@@ -340,6 +365,7 @@ export default function App() {
         onSelectWorkspace={selectWorkspace}
         onAddWorkspace={addWorkspace}
         onRemoveWorkspace={removeWorkspace}
+        onRemoveSession={removeSession}
         onSelect={selectSession}
         onNew={clearMessages}
       />

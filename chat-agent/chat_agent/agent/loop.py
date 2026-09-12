@@ -5,7 +5,7 @@
 - 不关心工具是什么：工具由 execute_tool 回调提供；
 - 不负责提示词：system 消息由调用方（chat）拼好放进 messages；
 - 无状态：history 是本次调用内部的局部列表，请求结束即丢；
-  但会把本次新产生的协议消息放进 trace 返回，调用方可存下来跨请求回放，
+  但会把本次新产生的协议消息放进 protocol_messages 返回，调用方可存下来跨请求回放，
   让模型下一轮仍能看到完整工具过程（assistant tool_calls + tool 结果对）。
 
 execute_tool 契约（由 chat_agent/agent/tools.py 提供）：
@@ -36,9 +36,9 @@ def run_agent_turn(
     execute_tool: 执行回调；None → 用 tools.execute_tool。
     max_rounds: 工具调用轮数上限，防模型无限循环。
 
-    返回 (最终文本, steps, trace)：
+    返回 (最终文本, steps, protocol_messages)：
     - steps: 工具调用流水账，每项 {"tool", "arguments", "result", "ok"}，供展示/审核；
-    - trace: 本次运行**新产生**的协议消息（assistant 带 tool_calls 的消息 + 每条
+    - protocol_messages: 本次运行**新产生**的协议消息（assistant 带 tool_calls 的消息 + 每条
       tool 结果消息 + 最终 assistant 文本消息），可直接追加进调用方的历史缓存，
       下次原样重发即可让模型"看到"本次完整工具过程。
     """
@@ -55,7 +55,7 @@ def run_agent_turn(
 
     history = list(messages)      # 局部历史：无状态，请求结束即丢
     steps: list[dict[str, Any]] = []
-    trace: list[dict[str, Any]] = []   # 本次新增的协议消息，供跨请求回放
+    protocol_messages: list[dict[str, Any]] = []   # 本次新增的协议消息，供跨请求回放
 
     for round_no in range(max_rounds):
         assistant_message, _ = client.request_assistant_message(
@@ -67,13 +67,13 @@ def run_agent_turn(
         if not tool_calls:
             # 模型直接说话了 → 任务结束
             content = str(assistant_message.get("content") or "")
-            trace.append({"role": "assistant", "content": content})
-            return content, steps, trace
+            protocol_messages.append({"role": "assistant", "content": content})
+            return content, steps, protocol_messages
 
         # 不变式①：声明要调工具的消息必须原样进历史，
         # 否则服务端无法把后续 tool 结果与它配对。
         history.append(assistant_message)
-        trace.append(assistant_message)
+        protocol_messages.append(assistant_message)
 
         for tc in tool_calls:
             # 用 .get 取值而不是 []：个别网关返回的字段可能缺失
@@ -109,11 +109,11 @@ def run_agent_turn(
                 "content": result,
             }
             history.append(tool_message)
-            trace.append(tool_message)
+            protocol_messages.append(tool_message)
 
     # 达到轮数上限仍没结束（模型陷入工具循环）：
     # 不带工具再问一次，逼它给出最终答复。
     assistant_message, _ = client.request_assistant_message(messages=history)
     content = str(assistant_message.get("content") or "")
-    trace.append({"role": "assistant", "content": content})
-    return content, steps, trace
+    protocol_messages.append({"role": "assistant", "content": content})
+    return content, steps, protocol_messages

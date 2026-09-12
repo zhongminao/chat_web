@@ -62,7 +62,7 @@ def main() -> None:
     fake = FakeClient(script)
 
     user_messages = [{"role": "user", "content": "请帮我写一个 hello.txt"}]
-    reply, steps, trace = run_agent_turn(
+    reply, steps, protocol_messages = run_agent_turn(
         client=fake,
         messages=user_messages,
         tool_schemas=TOOL_SCHEMAS,
@@ -92,6 +92,14 @@ def main() -> None:
     second_call_history = fake.history_per_call[1]
     tool_msgs = [m for m in second_call_history if m["role"] == "tool"]
     assert tool_msgs and tool_msgs[-1]["tool_call_id"] == "call_1", "tool_call_id 配对失败"
+
+    # 返回值的第三个是 protocol_messages，落盘时原样写进会话日志 —— 历史能回放全靠它。
+    # 断言它的**形状**：本轮新增的协议消息按顺序排，且以最终 assistant 文本结尾。
+    # （这层以前没人测：demo 只是把它接出来就丢了，改成别的名字改坏了也不会响。）
+    roles = [m["role"] for m in protocol_messages]
+    assert roles == ["assistant", "tool", "assistant", "tool", "assistant"], f"协议消息序列不对: {roles}"
+    assert protocol_messages[0].get("tool_calls"), "第一轮的调用声明丢了"
+    assert protocol_messages[-1]["content"] == reply, "最后一条必须是最终回复，否则回放会缺结尾"
     print("\n✅ 闭环通过：写文件 → 读回验证 → 模型总结，tool_call_id 配对正确")
 
 

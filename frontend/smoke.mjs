@@ -53,8 +53,12 @@ const workspacePayload = {
 const sessionList = {
   workspace: workspacePayload.workspaces[0],
   sessions: [
+    // 第一场：别的断言（标题、历史回放）依赖它，别让它被删除测试消耗掉。
     { id: "web-test-restore", title: "侧栏里的会话标题", turns: 3,
       lastActivity: Date.now(), workspaceId: "ws-bc8da407" },
+    // 第二场：专门用来验证"删一场对话"能精确删掉它、且不连累别的。
+    { id: "web-test-doomed", title: "注定被删的对话", turns: 2,
+      lastActivity: Date.now() - 60000, workspaceId: "ws-bc8da407" },
   ],
 };
 
@@ -78,6 +82,10 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
   // 每个场景一份可变的登记表：DELETE 之后要真的少一项，否则"删完列表还在"这种
   // bug 测不出来（stub 原样返回旧列表就等于假装删成功了）。
   let workspaces = workspacePayload.workspaces.map((entry) => ({ ...entry }));
+  // 会话列表也要可变：stub 原样返回旧列表就等于假装删成功了。
+  let sessions = sessionList.sessions.map((entry) => ({ ...entry }));
+  const deletedSessions = [];
+  const deletedWorkspaces = [];
 
   const dom = new JSDOM(html, {
     // url 不能省：jsdom 默认 origin 是 about:blank（不透明 origin），访问 localStorage
@@ -108,6 +116,47 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
     }
     // 三个接口的路径要分清：/api/workspaces、/api/sessions（可带 ?workspaceId=）、
     // /api/sessions/<id>。用 includes 一刀切会把它们搞混。
+    const method = options?.method || "GET";
+
+    // 删一场对话
+    if (method === "DELETE" && target.includes("/api/sessions/")) {
+      const id = decodeURIComponent(target.split("/api/sessions/")[1].split("?")[0]);
+      deletedSessions.push(id);
+      if (seedSession === id) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+      }
+      sessions = sessions.filter((entry) => entry.id !== id);
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ deleted: id }) });
+    }
+
+    // 删工作区。服务端语义：非空且没带 withSessions 就 409。
+    if (method === "DELETE" && target.includes("/api/workspaces")) {
+      const id = decodeURIComponent(target.split("/api/workspaces/")[1].split("?")[0]);
+      const withSessions = target.includes("withSessions=true");
+      const held = sessions.filter((entry) => entry.workspaceId === id);
+      deletedWorkspaces.push({ id, withSessions, held: held.length });
+      if (held.length > 0 && !withSessions) {
+        return Promise.resolve({
+          ok: false,
+          status: 409,
+          json: () => Promise.resolve({ detail: `还有 ${held.length} 场对话在这个工作区里` }),
+        });
+      }
+      sessions = sessions.filter((entry) => entry.workspaceId !== id);
+      workspaces = workspaces.filter((entry) => entry.id !== id);
+      // 服务端删空了会把自己复活（保证至少有一个工作区可回落），stub 照做，
+      // 否则会测出"一个工作区都不剩"这种真实服务端不会进入的状态。
+      if (workspaces.length === 0) {
+        workspaces = [{ id: "ws-default", name: "chat", root: "/home/zhong/mydisk/tools/chat" }];
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({
+          workspaces, default: workspaces[0]?.id, deletedSessions: held.length,
+        }),
+      });
+    }
+
     let body = providers;
     if (target.includes("/api/browse")) {
       body = browsePayload;
@@ -116,7 +165,7 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
     } else if (target.includes("/api/sessions/")) {
       body = sessionItems ?? {};
     } else if (target.includes("/api/sessions")) {
-      body = sessionList;
+      body = { workspace: workspacePayload.workspaces[0], sessions };
     }
     return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
   };
@@ -263,8 +312,8 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
       type("");
     }
 
-    // ---- 删除工作区 ----
-    // 补一次真实事故：删除入口曾经**永远看不见** —— .row-action 自己带着
+    // ---- 删除工作区 / 删除对话 ----
+    // 前两条补一次真实事故：删除入口曾经**永远看不见** —— .row-action 自己带着
     // display:none，而唯一负责显示它的选择器指向已经被删掉的旧菜单
     // .workspace-option。结果容器被 hover 出来了，里面的按钮还是不显示。
     //
@@ -279,9 +328,89 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
           `实得 ${JSON.stringify(rowActionBlock?.[1]?.trim().slice(0, 60))}`);
     check("没有指向已删菜单 .workspace-option 的显示规则",
           !cssRules.includes(".workspace-option"));
+
     check("每个工作区行都有删除按钮",
           window.document.querySelectorAll('button[aria-label^="删除工作区"]').length === 2,
           `实得 ${JSON.stringify([...window.document.querySelectorAll('button[aria-label^="删除工作区"]')].map((el) => el.getAttribute("aria-label")))}`);
+    check("每场对话都有删除按钮",
+          window.document.querySelectorAll('button[aria-label^="删除对话"]').length === 2,
+          `实得 ${JSON.stringify([...window.document.querySelectorAll('button[aria-label^="删除对话"]')].map((el) => el.getAttribute("aria-label")))}`);
+
+    const modalText = () => window.document.querySelector(".modal")?.textContent || "";
+    const clickInModal = (label) =>
+      [...(window.document.querySelector(".modal")?.querySelectorAll("button") || [])]
+        .find((el) => el.textContent.trim() === label)?.click();
+    const trashWorkspace = (name) =>
+      [...window.document.querySelectorAll('button[aria-label^="删除工作区"]')]
+        .find((el) => el.getAttribute("aria-label") === `删除工作区 ${name}`);
+    const trashSession = (title) =>
+      [...window.document.querySelectorAll('button[aria-label^="删除对话"]')]
+        .find((el) => el.getAttribute("aria-label") === `删除对话 ${title}`);
+
+    // 1) 有对话的工作区：先问，问的是"会连带删掉几场"。
+    trashWorkspace("chat")?.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    check("删有对话的工作区先弹确认框", !!window.document.querySelector(".modal"));
+    check("确认框弹出来时不发请求",
+          deletedWorkspaces.length === 0, `实得 ${JSON.stringify(deletedWorkspaces)}`);
+    check("确认框说清连带删几场 + 目录不动",
+          modalText().includes("2 场对话") && modalText().includes("目录不会被删"),
+          `实得 ${JSON.stringify(modalText().slice(0, 80))}`);
+    clickInModal("取消");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    check("取消后不删工作区且关掉弹窗",
+          deletedWorkspaces.length === 0 && !window.document.querySelector(".modal"));
+
+    // 2) 删除对话：精确删掉点的那一场，另一场必须还在。
+    trashSession("注定被删的对话")?.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    check("点删除对话先弹确认框", !!window.document.querySelector(".modal"));
+    check("确认前不发删除请求", deletedSessions.length === 0, `实得 ${JSON.stringify(deletedSessions)}`);
+    check("确认框说清删的是哪场、几轮、找不回来",
+          modalText().includes("注定被删的对话") && modalText().includes("2 轮")
+          && modalText().includes("找不回来"),
+          `实得 ${JSON.stringify(modalText().slice(0, 80))}`);
+    clickInModal("取消");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    check("取消后不删对话", deletedSessions.length === 0);
+
+    trashSession("注定被删的对话")?.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    window.document.querySelector(".modal .danger-button")?.click();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    check("确认后删掉的是点的那一场",
+          deletedSessions.length === 1 && deletedSessions[0] === "web-test-doomed",
+          `实得 ${JSON.stringify(deletedSessions)}`);
+    const titlesNow = [...window.document.querySelectorAll(".session-item-title")]
+      .map((el) => el.textContent);
+    check("被删的那场消失、另一场还在",
+          !titlesNow.includes("注定被删的对话") && titlesNow.includes("侧栏里的会话标题"),
+          `实得 ${JSON.stringify(titlesNow)}`);
+
+    // 3) 空工作区：没有不可撤销的后果，直接删，不弹框。
+    trashWorkspace("tmp")?.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    check("空工作区直接删，不弹确认框",
+          deletedWorkspaces.length === 1 && deletedWorkspaces[0].id === "ws-8c393341"
+          && deletedWorkspaces[0].withSessions === false && !window.document.querySelector(".modal"),
+          `实得 ${JSON.stringify(deletedWorkspaces)}`);
+    check("删掉的工作区从侧栏消失",
+          ![...window.document.querySelectorAll(".group-name")].some((el) => el.textContent === "tmp"));
+
+    // 4) 确认之后，工作区要带着 withSessions=true 才真删（服务端默认拒绝删非空工作区）。
+    trashWorkspace("chat")?.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    check("再点一次仍先弹确认框（这次剩 1 场）",
+          modalText().includes("1 场对话"), `实得 ${JSON.stringify(modalText().slice(0, 80))}`);
+    window.document.querySelector(".modal .danger-button")?.click();
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    const lastDelete = deletedWorkspaces[deletedWorkspaces.length - 1];
+    check("确认后带 withSessions=true 删工作区与其中的对话",
+          lastDelete?.id === "ws-bc8da407" && lastDelete?.withSessions === true,
+          `实得 ${JSON.stringify(deletedWorkspaces)}`);
+    check("删完关掉确认框且对话列表清空",
+          !window.document.querySelector(".modal")
+          && !(root.textContent || "").includes("侧栏里的会话标题"));
   }
 
   // 点一下开关：没锁的话应该把新状态 PATCH 回这场对话；锁了就不该发生任何写回。

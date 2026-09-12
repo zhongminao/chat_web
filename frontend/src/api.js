@@ -44,9 +44,28 @@ export async function browseDirectories(path) {
   return data;
 }
 
-// 还有对话引用它时服务端会拒绝（409）—— 那些对话会变成孤儿，找不到也回不来。
-export async function deleteWorkspace(workspaceId) {
-  const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}`, {
+// 默认只删登记；里面还有对话时服务端会拒绝（409）—— 那些对话的 header 指向它，
+// 删了登记它们就成孤儿，找不到也回不来。
+//
+// withSessions 才连同里面的对话一起删。那是**不可撤销**的，所以服务端要显式参数
+// 才肯做：调用方必须先让用户确认过。返回的 deletedSessions 是实际删掉几场。
+export async function deleteWorkspace(workspaceId, { withSessions = false } = {}) {
+  const query = withSessions ? "?withSessions=true" : "";
+  const response = await fetch(
+    `/api/workspaces/${encodeURIComponent(workspaceId)}${query}`,
+    { method: "DELETE" },
+  );
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.detail || "删除失败");
+  }
+  return data;
+}
+
+// 删掉一场对话。日志文件就是它的全部（历史是折叠回放这份日志得来的），
+// 删了没有回收站 —— 调用前必须确认过。
+export async function deleteSession(sessionId) {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
     method: "DELETE",
   });
   const data = await response.json().catch(() => ({}));

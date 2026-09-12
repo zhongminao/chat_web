@@ -444,12 +444,13 @@
    服务在局域网上是会被手机访问的。所以触屏上让它们常驻，别把删除入口锁死在
    :hover 里。 */
 @media (hover: none) {
-  .group-actions {
+  .group-actions,
+  .session-actions {
     display: inline-flex;
   }
 }
 
-.group .session-item {
+.group .session-row {
   padding-left: 34px;        /* 缩进一级，一眼看出属于哪个工作区 */
 }
 
@@ -479,11 +480,27 @@
   scrollbar-gutter: stable;
 }
 
+/* 会话行：主按钮（点=切过去）+ 右侧删除动作。
+   外层是 div 不是 button —— button 不能再套 button（HTML 不允许），
+   而这一行现在既有"切过去"又有"删掉"，必须是两个按钮。结构照搬组头。 */
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 8px;
+}
+
+.session-row:hover,
+.session-row.is-active {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
 .session-item {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  width: 100%;
   padding: 6px 8px;
   border: none;
   border-radius: 8px;
@@ -494,9 +511,17 @@
   cursor: pointer;
 }
 
-.session-item:hover,
-.session-item.is-active {
-  background: var(--dsw-alias-interactive-bg-hover);
+/* 删除动作跟组头一样：hover 才出现，不占常驻位置。当前这场对话也显示 ——
+   你正看着的那场，最可能就是你想删的那场。 */
+.session-actions {
+  flex: none;
+  display: none;
+  align-items: center;
+}
+
+.session-row:hover .session-actions,
+.session-row.is-active .session-actions {
+  display: inline-flex;
 }
 
 .session-item-title {
@@ -1457,6 +1482,46 @@
   color: var(--dsw-alias-state-business-primary);
 }
 
+/* 确认框的正文。跟目录选择器共用 .modal 材质，只多这一段说明文字。 */
+.modal-body {
+  flex: none;
+  margin-top: 8px;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* 危险动作按钮（删对话 / 删工作区）。数值照抄上游
+ * ui-settings-models/ModelsSection.module.css 的 .dangerButton —— 不是自己配的红色：
+ * 上游的危险按钮是**透明底 + 红字**，hover 才上一层极淡的红
+ * （--dsw-alias-interactive-bg-hover-danger），不是一整块实心红按钮。 */
+.danger-button {
+  flex: none;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 18px;
+  background: transparent;
+  color: var(--dsw-alias-state-error-primary);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  cursor: pointer;
+}
+
+.danger-button:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-danger);
+}
+
+.danger-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
 /* 左下角放"新建工作区"，右下角放取消/确认 —— 两类动作分开摆，
    免得"建一个新的"和"就要这个"挨在一起被误点。
 
@@ -1481,7 +1546,8 @@
 }
 
 .modal-actions .secondary-button,
-.modal-actions .primary-button {
+.modal-actions .primary-button,
+.modal-actions .danger-button {
   height: 36px;
   padding: 0 14px;
   border-radius: 18px;

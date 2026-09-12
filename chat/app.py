@@ -104,8 +104,11 @@ MIGRATED_SESSIONS = migrate_legacy_workspace_field()
 class TurnResult(NamedTuple):
     reply: str
     steps: list
-    trace: list
-    messages: list       # 实际发给模型的消息（含拼好的 system），轨迹要记它
+    # 本轮新增的协议消息（assistant tool_calls + tool 结果 + 最终文本），
+    # 落盘时存成日志里的 "protocol" 字段 —— 两个名字指同一件东西，
+    # 存储键叫 protocol 是因为它描述的是"重发用的协议消息"，别改名（已有历史按它读）。
+    protocol_messages: list
+    messages: list       # 实际发给模型的消息（含拼好的 system）
     temperature: float   # 生效值：payload 没给时来自 providers.yaml
 
 
@@ -317,22 +320,22 @@ def request_real_reply(
     )
     if payload.tools_enabled:
         # agent 模式：多轮工具调用，直到模型直接回答
-        reply, steps, trace = run_agent_turn(client, normalized_messages)
+        reply, steps, protocol_messages = run_agent_turn(client, normalized_messages)
     else:
         assistant_message, _ = client.request_assistant_message(
             messages=normalized_messages,
         )
         reply = str(assistant_message["content"])
         steps = []
-        # trace 的不变式：本轮产生的协议消息，**总以最终 assistant 消息结尾**。
+        # protocol_messages 的不变式：本轮产生的协议消息，**总以最终 assistant 消息结尾**。
         # 非工具模式过去返回 []，后果是回放的历史里没有 assistant 轮 ——
         # 前端 protocol 只收 user 消息，模型记不住自己说过什么（会话日志同样缺）。
-        trace = [{"role": "assistant", "content": reply}]
+        protocol_messages = [{"role": "assistant", "content": reply}]
 
     return TurnResult(
         reply=reply,
         steps=steps,
-        trace=trace,
+        protocol_messages=protocol_messages,
         messages=normalized_messages,
         temperature=temperature,
     )
@@ -450,23 +453,35 @@ def create_workspace(
 @app.delete("/api/workspaces/{workspace_id}")
 def delete_workspace(
     workspace_id: str,
+    withSessions: bool = False,
     ) -> dict:
     """删掉一个工作区登记。
 
-    **下面还有会话引用它时拒绝** —— 那些会话的 header 里存的是它的 id，删掉登记
-    它们就变成了孤儿：既不在任何工作区的列表里，也没法从界面找回来。所以宁可
-    让删除失败并说清原因，也不做"悄悄让对话消失"这种事。
+    里面有会话时，默认**不删**并返回 409：那些会话的 header 里存的是它的 id，
+    登记一删它们就成了孤儿 —— 既不在任何工作区的列表里，也没法从界面找回来。
+
+    要连会话一起删，客户端必须显式带 withSessions=true。这个开关是刻意的：
+    会话日志是不可撤销的，不能让一次手滑或一个手写的 DELETE 就把历史抹掉 ——
+    界面那边是先把"会删掉几场对话"说给用户听、拿到确认后才带这个参数。
+
+    注意删的是登记和会话日志，**不碰磁盘上的工作目录**：那是用户的项目目录，
+    删登记只等于"不再在侧栏里列出来"，不等于 rm -rf。
     """
     entries = workspace_store.load(WORKSPACE_DIR)
     if not any(entry.get("id") == workspace_id for entry in entries):
         raise HTTPException(status_code=404, detail="workspace not found")
 
     used_by = session_store.list_sessions(SESSION_DIR, workspace_id)
-    if used_by:
+    if used_by and not withSessions:
         raise HTTPException(
             status_code=409,
             detail=f"还有 {len(used_by)} 场对话在这个工作区里",
         )
+
+    deleted_sessions = 0
+    for session in used_by:
+        if session_store.delete_session(SESSION_DIR, session["id"]):
+            deleted_sessions += 1
 
     workspace_store.save(
         WORKSPACE_DIR,
@@ -479,7 +494,24 @@ def delete_workspace(
     return {
         "workspaces": workspace_store.load(WORKSPACE_DIR),
         "default": (workspace_store.default(WORKSPACE_DIR) or {}).get("id"),
+        "deletedSessions": deleted_sessions,
     }
+
+
+@app.delete("/api/sessions/{session_id}")
+def delete_session(
+    session_id: str,
+    ) -> dict:
+    """删掉一场对话（它的日志文件就是它的全部）。
+
+    删了就没了：没有数据库、没有回收站，历史是折叠回放这份日志得来的。
+    所以界面上必须先确认再调这里。
+    """
+    if not session_store.exists(SESSION_DIR, session_id):
+        raise HTTPException(status_code=404, detail="session not found")
+    if not session_store.delete_session(SESSION_DIR, session_id):
+        raise HTTPException(status_code=500, detail="删不掉这场对话的日志文件")
+    return {"deleted": session_id}
 
 
 @app.post("/api/sessions")
@@ -638,7 +670,7 @@ def chat(
     session_store.append_turn(
         SESSION_DIR, session_id,
         user_messages=[message.model_dump() for message in payload.messages],
-        protocol=result.trace,
+        protocol=result.protocol_messages,
         workspace_id=bound_workspace_id,
         meta={
             "provider": payload.provider,
