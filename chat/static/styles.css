@@ -549,10 +549,13 @@
   align-items: flex-end;
 }
 
+/* 说话人标签：界面不显示，复制时带上。
+ * 不能用 display:none / visibility:hidden —— 那两种的文本不会被复制；
+ * color:transparent 会。line-height:0 让占位归零，避免消息间多出空白。 */
 .message-role {
   font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-caption);
+  line-height: 0;
+  color: transparent;
 }
 
 /* ---------------------------------------------------------------------------
