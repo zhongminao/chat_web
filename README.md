@@ -52,9 +52,16 @@ pnpm run check      # build + smoke（jsdom 里真跑一遍产物）
 | 变量 | 真实文件 | 谁在读 |
 |---|---|---|
 | `GPT_API_KEY` / `DEEPSEEK_API_KEY` / `QWEN_API_KEY` / `LOCAL_QWEN_API_KEY` | `~/.bashrc` | `src/chat/app.py` |
-| `LOCAL_QWEN_BASE_URL` / `_MODEL_NAME` / `_MODEL_DIR` | shell 环境变量 | `src/chat/providers.yaml`；`start_local_qwen.sh` |
 | `CHAT_STORAGE` / `CHAT_WORKSPACE` | `chat.service` 的 `Environment=` | `src/chat/app.py`：运行时数据位置 / 默认工作区根 |
+| `LOCAL_QWEN_BASE_URL` / `LOCAL_QWEN_MODEL_NAME` | **可选覆盖**，默认值在 `providers.yaml` 里 | `src/chat/providers.yaml` 的 `base_url_env` / `model_name_env` |
+| `LOCAL_QWEN_MODEL_DIR` | **可选覆盖**，默认值在脚本里 | `start_local_qwen.sh` —— 只管**启动 vLLM 服务**，chat 不读它 |
 
+- **`local_qwen` 相关的变量全都不用设也能跑**：base_url、模型名、api_key 的默认值都在
+  `providers.yaml` 里（`base_url` / `models[0].id` / `api_key_default`），环境变量只是覆盖。
+  而且对 **systemd 启动的服务来说这些覆盖是无效的**（继承不到你终端的 shell 环境），
+  真要改就改 yaml，或者写进 unit 的 `Environment=`
+- `LOCAL_QWEN_MODEL_DIR` 不属于客户端配置：它决定 **vLLM 从哪个目录加载模型**，所以归启动
+  脚本管，不在 `providers.yaml` 里
 - `GPT_API_KEY` 是**文本解析 `~/.bashrc`** 拿的，不是读环境变量：服务由 systemd 启动，
   **继承不到你终端的 shell 环境**（环境变量只在自己那棵进程树里往下传）
 - `CHAT_STORAGE` / `CHAT_WORKSPACE` 是**路径**不是密钥，所以直接写在 unit 里。它们的默认值
@@ -62,9 +69,8 @@ pnpm run check      # build + smoke（jsdom 里真跑一遍产物）
 - `~/.config/chat/chat.env` 是 unit 的可选 `EnvironmentFile`，**当前不存在**（unit 用 `-` 前缀，
   缺失不影响启动）。要加变量再创建它，不必改 unit
 
-本地 Qwen：`bash start_local_qwen.sh [port]`（默认 8001）后
-`export LOCAL_QWEN_BASE_URL=http://127.0.0.1:8001/v1`。模型目录默认
-`/home/zhong/mydisk/IM_Opt/LLM/qwen3p5_2b`，用 `LOCAL_QWEN_MODEL_DIR` 覆盖。
+本地 Qwen：`bash start_local_qwen.sh [port]`（默认 8001）就行，**不用 export 任何东西**；
+要指向别的服务（比如另一台机器上的 vLLM）再 `export LOCAL_QWEN_BASE_URL=...`。
 
 ## 运行说明
 
