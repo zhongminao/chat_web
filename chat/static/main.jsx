@@ -417,7 +417,7 @@ function App() {
               className={message.role === "user" ? "message-row user-row" : "message-row"}
             >
               <div className="message-role">
-                {message.role === "user" ? "我" : "助手"}
+                {message.role === "user" ? "我：" : "助手："}
               </div>
               <div className={message.role === "user" ? "bubble user-bubble" : "bubble"}>
                 {message.role === "tool-step" ? (
@@ -449,7 +449,7 @@ function App() {
 
           {isLoading ? (
             <div className="message-row">
-              <div className="message-role">助手</div>
+              <div className="message-role">助手：</div>
               {/* 新增的 loading-bubble 类：等待态在 DSH 那边是一行「扫光文字」
                   （ChatView 的 turnStatus），不是一块静态气泡。文字内容没变，
                   只是多挂一个类名，样式写在 styles.css 里。 */}
