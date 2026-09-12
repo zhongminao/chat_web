@@ -1,7 +1,17 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
-// 月日 + 时刻。原先当天只显示时刻，跨天后只有一个 MM-DD —— 分不清是哪天几点
-// 发生的事，所以统一带上日期。
+import {
+  IconFolderClose16,
+  IconFolderOpen16,
+  IconNewChatOutline16,
+  IconPanelLeftOutline16,
+  IconProjectAddOutline16,
+  IconSearchOutline16,
+  IconTrashOutline16,
+} from "../icons";
+import DirectoryPicker from "./DirectoryPicker";
+
+// 月日 + 时刻。原先当天只显示时刻、跨天只有一个 MM-DD —— 分不清哪天几点。
 function formatTime(ms) {
   if (!ms) {
     return "";
@@ -11,14 +21,14 @@ function formatTime(ms) {
   return `${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
 }
 
-// 左侧栏：工作区 + 会话历史。
+// 左侧栏：工作区分组 + 每个工作区下的会话历史。
 //
-// 收起时不留整条空白，缩成一条窄条（对齐上游 SIDEBAR_COLLAPSED 的 56px），
-// 里面只放展开按钮 —— 收起之后仍然点得到，不用去顶栏找入口。
+// 分组对齐上游 sidebar 的 groupBy=workspace：**所有**工作区的会话一起列出来、
+// 按工作区分组，而不是过滤到当前那一个。切换工作区 = 点它的组头（或点它下面的
+// 任何一场对话），「新对话」落在当前工作区。
 //
-// 工作区是个实体（id / 名字 / 根路径），所以这里是可点的：点开列出已登记的工作区，
-// 也能按路径新登记一个、或删掉一个。切换工作区等于开始一场新对话
-// （一个对话只属于一个工作区）。
+// 收起时缩成 56px 窄条（上游 SIDEBAR_COLLAPSED），只留展开按钮 —— 收起不等于
+// 消失，入口留在原地。
 export default function SessionSidebar({
   workspace,
   workspaces,
@@ -32,78 +42,68 @@ export default function SessionSidebar({
   onSelect,
   onNew,
 }) {
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [isAdding, setIsAdding] = useState(false);
-  const [pathDraft, setPathDraft] = useState("");
-  const [error, setError] = useState("");
-  // 搜索展开是独立状态，不跟 query 绑：点开还没打字时也要展开。
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const menuRef = useRef(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [error, setError] = useState("");
+  const [expanded, setExpanded] = useState({});
   const searchRef = useRef(null);
 
-  // 搜索只过滤已加载的列表（服务端一次给全），所以是纯前端的事，不用新接口。
   const keyword = query.trim();
-  const visibleSessions = keyword
-    ? sessions.filter((session) => session.title.includes(keyword))
-    : sessions;
+
+  // 分组：按登记顺序列出每个工作区，会话挂到各自的组下。搜索时只留命中的组，
+  // 不然一搜就只剩一堆空组头。
+  const groups = useMemo(() => {
+    const byWorkspace = workspaces.map((entry) => ({
+      workspace: entry,
+      sessions: sessions.filter((session) => {
+        if (session.workspaceId !== entry.id) {
+          return false;
+        }
+        return !keyword || session.title.includes(keyword);
+      }),
+    }));
+    // 老数据可能没有 workspaceId（迁移补不上时）—— 别让它们从列表里消失。
+    const orphans = sessions.filter(
+      (session) => !workspaces.some((entry) => entry.id === session.workspaceId)
+    );
+    const visible = keyword
+      ? byWorkspace.filter((group) => group.sessions.length > 0)
+      : byWorkspace;
+    if (orphans.length) {
+      visible.push({
+        workspace: { id: "", name: "未分组", root: "" },
+        sessions: orphans.filter((session) => !keyword || session.title.includes(keyword)),
+      });
+    }
+    return visible;
+  }, [workspaces, sessions, keyword]);
 
   function closeSearch() {
     setSearchOpen(false);
     setQuery("");
   }
 
-  // 点菜单外面关掉。挂在 document 上才能知道点到的是外面；ref 挂最外层，
-  // 让按钮和菜单算作同一块内部区域，否则点按钮会被判成外部点击。
   useEffect(() => {
-    if (!isMenuOpen) {
-      return undefined;
+    if (searchOpen) {
+      searchRef.current?.focus();
     }
-    function handlePointerDown(event) {
-      if (menuRef.current && !menuRef.current.contains(event.target)) {
-        setIsMenuOpen(false);
-        setIsAdding(false);
-        setError("");
-      }
-    }
-    document.addEventListener("mousedown", handlePointerDown);
-    return () => document.removeEventListener("mousedown", handlePointerDown);
-  }, [isMenuOpen]);
+  }, [searchOpen]);
 
-  function closeMenu() {
-    setIsMenuOpen(false);
-    setIsAdding(false);
-    setError("");
-  }
-
-  function pickWorkspace(id) {
-    onSelectWorkspace(id);
-    closeMenu();
-  }
-
-  async function submitWorkspace(event) {
-    event.preventDefault();
-    const root = pathDraft.trim();
-    if (!root) {
-      return;
-    }
+  async function removeWorkspace(event, entry) {
+    event.stopPropagation();   // 别冒泡成"选中这个工作区"
     try {
-      const entry = await onAddWorkspace(root);
-      setPathDraft("");
-      pickWorkspace(entry.id);
-    } catch (addError) {
-      setError(addError.message);
-    }
-  }
-
-  async function removeWorkspace(event, id) {
-    event.stopPropagation();   // 别让它冒泡成"选中这个工作区"
-    try {
-      await onRemoveWorkspace(id);
+      await onRemoveWorkspace(entry.id);
       setError("");
     } catch (removeError) {
       setError(removeError.message);
     }
+  }
+
+  async function confirmAdd(root) {
+    const entry = await onAddWorkspace(root);
+    setPickerOpen(false);
+    return entry;
   }
 
   if (collapsed) {
@@ -113,10 +113,10 @@ export default function SessionSidebar({
           type="button"
           className="sidebar-toggle"
           onClick={onToggle}
-          aria-label="展开对话列表"
-          title="展开对话列表"
+          aria-label="展开侧栏"
+          title="展开侧栏"
         >
-          »
+          <IconPanelLeftOutline16 size={18} />
         </button>
       </aside>
     );
@@ -124,107 +124,41 @@ export default function SessionSidebar({
 
   return (
     <aside className="sidebar">
-      <div className="sidebar-head" ref={menuRef}>
-        <button
-          type="button"
-          className="workspace-button"
-          onClick={() => {
-            setIsMenuOpen((open) => !open);
-            setIsAdding(false);
-            setError("");
-          }}
-          aria-haspopup="menu"
-          aria-expanded={isMenuOpen}
-          title={workspace?.root || ""}
-        >
-          <span className="sidebar-workspace-name">{workspace?.name || "工作区"}</span>
-          <span className="model-chip-chevron" aria-hidden="true" />
-        </button>
+      {/* 顶行：当前工作区 + 收起按钮。这里只是"新对话落在哪"的提示，切换靠下面的组头。 */}
+      <div className="sidebar-head">
+        <span className="sidebar-workspace-name" title={workspace?.root || ""}>
+          {workspace?.name || "工作区"}
+        </span>
         <button
           type="button"
           className="sidebar-toggle"
           onClick={onToggle}
-          aria-label="收起对话列表"
-          title="收起对话列表"
+          aria-label="收起侧栏"
+          title="收起侧栏"
         >
-          «
+          <IconPanelLeftOutline16 size={16} />
         </button>
-
-        {isMenuOpen ? (
-          <div className="workspace-popup" role="menu">
-            {workspaces.map((item) => (
-              <div
-                key={item.id}
-                className={
-                  item.id === workspace?.id
-                    ? "workspace-option is-selected"
-                    : "workspace-option"
-                }
-              >
-                <button
-                  type="button"
-                  role="menuitemradio"
-                  aria-checked={item.id === workspace?.id}
-                  className="workspace-option-main"
-                  onClick={() => pickWorkspace(item.id)}
-                >
-                  <span className="workspace-option-name">{item.name}</span>
-                  <span className="workspace-option-path">{item.root}</span>
-                </button>
-                <button
-                  type="button"
-                  className="row-action"
-                  onClick={(event) => removeWorkspace(event, item.id)}
-                  aria-label={`删除工作区 ${item.name}`}
-                  title="删除这个工作区（里面还有对话时会失败）"
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-
-            {/* 添加入口在区块头的 ＋（对齐上游 workspace.add 的位置），
-                所以这里不再放一个「添加工作区…」—— 两个入口做同一件事只会让人犹豫。 */}
-            {isAdding ? (
-              <form className="workspace-add" onSubmit={submitWorkspace}>
-                <input
-                  autoFocus
-                  value={pathDraft}
-                  onChange={(event) => setPathDraft(event.target.value)}
-                  placeholder="目录绝对路径"
-                  aria-label="新工作区路径"
-                />
-              </form>
-            ) : null}
-
-            {error ? <div className="workspace-error">{error}</div> : null}
-          </div>
-        ) : null}
       </div>
 
       <button type="button" className="new-session-button" onClick={onNew}>
+        <IconNewChatOutline16 size={16} />
         新对话
       </button>
 
-      {/* 区块头：标签 + 内联搜索。展开搜索时标签与按钮一起收起来给它让位 ——
-          这套联动是 DSH 那层的做法（ui-workspace 的 sectionHeader/sectionLabel/
-          searchSlot/headerActions），过渡靠 CSS 的 max-width + opacity 做，
-          不是靠条件渲染硬切。 */}
+      {/* 区块头（上游 WorkspaceBrowser 的 sectionHeader）：标签 + 内联搜索 + 动作。
+          搜索展开时标签与动作簇一起收 max-width 让位 —— 过渡靠 CSS，不是硬切。 */}
       <div className="section-header">
-        <span className={searchOpen ? "section-label is-hidden" : "section-label"}>会话</span>
+        <span className={searchOpen ? "section-label is-hidden" : "section-label"}>工作区</span>
         <div className={searchOpen ? "section-search-slot is-expanded" : "section-search-slot"}>
           <button
             type="button"
             className="section-icon-button"
-            onClick={() => {
-              setSearchOpen(true);
-              searchRef.current?.focus();
-            }}
+            onClick={() => setSearchOpen(true)}
             disabled={searchOpen}
-            aria-label="搜索会话"
-            title="搜索会话"
+            aria-label="搜索对话"
+            title="搜索对话"
           >
-            ⌕
+            <IconSearchOutline16 size={searchOpen ? 12 : 14} />
           </button>
           <input
             ref={searchRef}
@@ -238,11 +172,11 @@ export default function SessionSidebar({
               }
             }}
             tabIndex={searchOpen ? 0 : -1}
-            placeholder="搜索标题"
-            aria-label="搜索会话"
+            placeholder="搜索对话"
+            aria-label="搜索对话"
           />
-          {/* 清空按钮在搜索槽里面（上游的 clearButton 也在 search 里）——
-              放进右边那组动作里会被"搜索展开时隐藏"的规则一起藏掉。 */}
+          {/* 清空按钮在搜索槽**里面**（上游 clearButton 也在 search 里）——
+              放进右边动作簇会被"搜索展开时隐藏"的规则一起藏掉。 */}
           <button
             type="button"
             className="section-clear-button"
@@ -258,43 +192,93 @@ export default function SessionSidebar({
             type="button"
             className="section-icon-button"
             onClick={() => {
-              setIsMenuOpen(true);
-              setIsAdding(true);
               setError("");
+              setPickerOpen(true);
             }}
             aria-label="添加工作区"
             title="添加工作区"
           >
-            ＋
+            <IconProjectAddOutline16 size={16} />
           </button>
         </div>
       </div>
 
       <nav className="session-list">
-        {visibleSessions.length === 0 ? (
-          <div className="session-empty">
-            {keyword ? "没有匹配的会话" : "还没有对话"}
-          </div>
+        {groups.length === 0 ? (
+          <div className="session-empty">{keyword ? "没有匹配的对话" : "还没有工作区"}</div>
         ) : (
-          visibleSessions.map((session) => (
-            <button
-              key={session.id}
-              type="button"
-              className={session.id === activeId ? "session-item is-active" : "session-item"}
-              onClick={() => onSelect(session.id)}
-              title={session.title}
-            >
-              <span className="session-item-title">{session.title}</span>
-              <span className="session-item-meta">
-                {session.turns} 轮 · {formatTime(session.lastActivity)}
-              </span>
-            </button>
-          ))
+          groups.map((group) => {
+            const isCurrent = group.workspace.id === workspace?.id;
+            const isOpen = expanded[group.workspace.id] !== false;
+            return (
+              <section key={group.workspace.id || "__orphan"} className="group">
+                <div
+                  className={isCurrent ? "group-header is-current" : "group-header"}
+                  onClick={() => group.workspace.id && onSelectWorkspace(group.workspace.id)}
+                  title={group.workspace.root || group.workspace.name}
+                >
+                  <button
+                    type="button"
+                    className="group-toggle"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setExpanded((state) => ({
+                        ...state,
+                        [group.workspace.id]: !isOpen,
+                      }));
+                    }}
+                    aria-label={isOpen ? "收起" : "展开"}
+                    aria-expanded={isOpen}
+                  >
+                    {isOpen ? <IconFolderOpen16 size={16} /> : <IconFolderClose16 size={16} />}
+                  </button>
+                  <span className="group-name">{group.workspace.name}</span>
+                  <span className="group-count">{group.sessions.length}</span>
+                  {group.workspace.id ? (
+                    <button
+                      type="button"
+                      className="row-action"
+                      onClick={(event) => removeWorkspace(event, group.workspace)}
+                      aria-label={`删除工作区 ${group.workspace.name}`}
+                      title="删除这个工作区（里面还有对话时会失败）"
+                    >
+                      <IconTrashOutline16 size={14} />
+                    </button>
+                  ) : null}
+                </div>
+
+                {isOpen
+                  ? group.sessions.map((session) => (
+                      <button
+                        key={session.id}
+                        type="button"
+                        className={
+                          session.id === activeId ? "session-item is-active" : "session-item"
+                        }
+                        onClick={() => onSelect(session)}
+                        title={session.title}
+                      >
+                        <span className="session-item-title">{session.title}</span>
+                        <span className="session-item-meta">
+                          {session.turns} 轮 · {formatTime(session.lastActivity)}
+                        </span>
+                      </button>
+                    ))
+                  : null}
+              </section>
+            );
+          })
         )}
       </nav>
-      {/* 列表底部的渐隐：滚到底时最后一行淡出，而不是被硬切一刀。
-          指针事件关掉，它只是视觉层。 */}
+
+      {error ? <div className="sidebar-error">{error}</div> : null}
       <div className="session-list-fade" aria-hidden="true" />
+
+      <DirectoryPicker
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        onConfirm={confirmAdd}
+      />
     </aside>
   );
 }

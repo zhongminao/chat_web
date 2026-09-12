@@ -91,33 +91,14 @@
   box-sizing: border-box;
 }
 
-.workspace-button {
-  flex: 1;
-  min-width: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 8px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: inherit;
-  font-family: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.workspace-button:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
 .sidebar-workspace-name {
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-align: left;
+  font-weight: 600;
+  padding-left: 8px;
 }
 
 .sidebar-toggle {
@@ -148,75 +129,6 @@
   color: var(--dsw-alias-label-primary);
 }
 
-/* 工作区菜单。表面 token 与 .model-popup 一致 —— 同一个应用里的浮层应该是同一种面。 */
-.workspace-popup {
-  position: absolute;
-  top: calc(100% - 4px);
-  left: 0;
-  right: 0;
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  max-height: 320px;
-  padding: 4px;
-  overflow-y: auto;
-  border: 1px solid var(--dsw-alias-border-inverted);
-  border-radius: 12px;
-  background: var(--dsw-specific-menu);
-  box-shadow: var(--dsw-shadow-lv3);
-  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
-  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
-}
-
-.workspace-option {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  border-radius: 8px;
-}
-
-.workspace-option:hover,
-.workspace-option.is-selected {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-.workspace-option-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 6px 8px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--dsw-alias-label-primary);
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.workspace-option-main.is-add {
-  width: 100%;
-}
-
-.workspace-option-name {
-  font-size: 14px;
-  line-height: 20px;
-}
-
-.workspace-option-path {
-  font-size: 12px;
-  line-height: 16px;
-  color: var(--dsw-alias-label-tertiary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  direction: rtl;             /* 路径太长时先省略开头，末端目录名才是要紧的 */
-  text-align: left;
-}
-
 /* 行内操作：上游 rows/Rows.module.css 的做法 —— 平时不占位，hover 才出现。 */
 .row-action {
   flex: none;
@@ -243,31 +155,6 @@
 
 .row-action:hover {
   color: var(--dsw-alias-label-primary);
-}
-
-.workspace-add {
-  padding: 6px;
-}
-
-.workspace-add input {
-  width: 100%;
-  height: 32px;
-  padding: 0 8px;
-  box-sizing: border-box;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
-  background: var(--dsw-alias-button-elevated-fill);
-  color: var(--dsw-alias-label-primary);
-  font-family: inherit;
-  font-size: 13px;
-  outline: none;
-}
-
-.workspace-error {
-  padding: 6px 8px;
-  font-size: 12px;
-  line-height: 16px;
-  color: var(--dsw-alias-state-business-primary);
 }
 
 .new-session-button {
@@ -460,7 +347,165 @@
   pointer-events: none;
 }
 
+/* 工作区分组（对齐上游 sidebar 的 groupBy=workspace）：一个组头 + 它下面的会话。
+   当前工作区的文件夹图标走 state-business-primary —— 上游 rows 的 folderActive
+   就是这个颜色，不额外发明标记。 */
+.group + .group {
+  margin-top: 4px;
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 8px;
+  border-radius: 8px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.group-header:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.group-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.group-header.is-current .group-toggle {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.group-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.group-header.is-current .group-name {
+  color: var(--dsw-alias-label-primary);
+}
+
+.group-count {
+  flex: none;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 组头 hover 时才对调：数字让位给删除按钮（上游行内操作的做法）。 */
+.group-header:hover .group-count {
+  display: none;
+}
+
+.group .session-item {
+  padding-left: 34px;        /* 缩进一级，一眼看出属于哪个工作区 */
+}
+
+.sidebar-error {
+  flex: none;
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-state-business-primary);
+}
+
 /* 会话列表。左右负外边距抵消侧栏内边距，让滚动条贴到侧栏边缘（上游 regionArea 的做法）。 */
+/* 工作区分组（对齐上游 sidebar 的 groupBy=workspace）：一个组头 + 它下面的会话。
+   当前工作区的文件夹图标走 state-business-primary —— 上游 rows 的 folderActive
+   就是这个颜色，不额外发明标记。 */
+.group + .group {
+  margin-top: 4px;
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 8px;
+  border-radius: 8px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.group-header:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.group-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.group-header.is-current .group-toggle {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.group-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.group-header.is-current .group-name {
+  color: var(--dsw-alias-label-primary);
+}
+
+.group-count {
+  flex: none;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 组头 hover 时才对调：数字让位给删除按钮（上游行内操作的做法）。 */
+.group-header:hover .group-count {
+  display: none;
+}
+
+.group .session-item {
+  padding-left: 34px;        /* 缩进一级，一眼看出属于哪个工作区 */
+}
+
+.sidebar-error {
+  flex: none;
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-state-business-primary);
+}
+
 /* 会话列表。左右负外边距抵消侧栏内边距，让滚动条贴到侧栏边缘（上游 regionArea 的做法）。
    scrollbar-gutter: stable 是关键：占位一直留着，滚动条出现/消失时行不会左右跳。
    padding-bottom 给底部渐隐层留出位置，滚到底时最后一行落在渐变之上。 */
@@ -1340,4 +1385,127 @@
   .chat-box {
     padding: 12px calc(var(--dsh-composer-side-clearance) + 8px);
   }
+}
+
+/* ===========================================================================
+ * 弹窗（目录选择器）
+ * ---------------------------------------------------------------------------
+ * 上游的目录选择走 ui-directory-picker 两个包；这里做最小可用版，所以样式也
+ * 从简：遮罩 + 一块面板 + 两行按钮。表面 token 与 .model-popup 同一套。
+ * ======================================================================== */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 32%);
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: min(460px, calc(100vw - 32px));
+  max-height: min(560px, calc(100vh - 64px));
+  padding: 16px;
+  border: 1px solid var(--dsw-alias-border-inverted);
+  border-radius: 16px;
+  background: var(--dsw-specific-menu);
+  box-shadow: var(--dsw-shadow-lv3);
+  color: var(--dsw-alias-label-primary);
+}
+
+.modal-title {
+  flex: none;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.picker-path {
+  flex: none;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;             /* 省略开头，末端目录名才要紧 */
+  text-align: left;
+}
+
+.picker-list {
+  flex: 1;
+  min-height: 160px;
+  margin-top: 10px;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  scrollbar-gutter: stable;
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+}
+
+.picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.picker-row:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.picker-row-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.picker-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-empty {
+  padding: 12px 8px;
+  font-size: 13px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.modal-error {
+  flex: none;
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.modal-actions {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
 }

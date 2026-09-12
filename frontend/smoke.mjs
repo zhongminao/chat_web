@@ -160,8 +160,12 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
           `实得 ${JSON.stringify(metaEl?.textContent)}`);
 
     // 区块头：标签 + 搜索 + 右侧动作
-    check("区块头有「会话」标签",
-          window.document.querySelector(".section-label")?.textContent === "会话");
+    check("区块头有「工作区」标签",
+          window.document.querySelector(".section-label")?.textContent === "工作区");
+    // 分组视图：组头要显示工作区名，会话缩进挂在它下面
+    check("按工作区分组：组头显示工作区名",
+          window.document.querySelector(".group-name")?.textContent === "chat",
+          `实得 ${JSON.stringify(window.document.querySelector(".group-name")?.textContent)}`);
     const searchInput = window.document.querySelector(".section-search-input");
     check("区块头有搜索输入框", !!searchInput);
 
@@ -179,7 +183,7 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
       await new Promise((resolve) => setTimeout(resolve, 20));
       check("搜不到时列表为空",
             !(root.textContent || "").includes("侧栏里的会话标题")
-            && (root.textContent || "").includes("没有匹配的会话"));
+            && (root.textContent || "").includes("没有匹配的对话"));
       type("侧栏里");
       await new Promise((resolve) => setTimeout(resolve, 20));
       check("搜得到时列表恢复", (root.textContent || "").includes("侧栏里的会话标题"));
@@ -250,7 +254,8 @@ const railCheck = (label, condition) => {
   if (!condition) failures += 1;
 };
 railCheck("侧栏带上了 is-collapsed", /is-collapsed/.test(rail.html));
-railCheck("窄条里只剩展开按钮", rail.text.includes("»"));
+railCheck("窄条里只剩展开按钮（图标，不是文字）",
+          rail.html.includes("sidebar-toggle") && !rail.html.includes("session-item"));
 railCheck("窄条里不再渲染会话列表", !/侧栏里的会话标题/.test(rail.text));
 railCheck("窄条里没有「新对话」", !rail.text.includes("新对话"));
 

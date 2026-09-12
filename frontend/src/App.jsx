@@ -86,17 +86,11 @@ export default function App() {
   }
 
   // 侧栏数据。每轮对话结束后要重取一次 —— 标题和轮数都跟着变。
-  function refreshSessions(targetWorkspaceId = workspaceId) {
-    return fetchSessions(targetWorkspaceId)
+  // **不带 workspaceId**：侧栏按工作区分组显示全部，不再是"只看当前那个"。
+  function refreshSessions() {
+    return fetchSessions()
       .then((data) => {
         setSessions(data.sessions || []);
-        // 服务端不认识客户端给的 id 时会回落到默认工作区，以它为准，别各说各的。
-        if (data.workspace?.id && data.workspace.id !== targetWorkspaceId) {
-          writeStored(WORKSPACE_KEY, data.workspace.id);
-          setWorkspaceId(data.workspace.id);
-          return data.workspace.id;
-        }
-        return targetWorkspaceId;
       })
       .catch(() => null);
   }
@@ -122,15 +116,18 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    refreshSessions(workspaceId);
-  }, [workspaceId]);
+    refreshSessions();
+  }, []);
 
   // 工作区登记表。默认工作区由服务端决定（客户端本地存的 id 可能已经被删）。
   function refreshWorkspaces() {
     return fetchWorkspaces()
       .then((data) => {
-        setWorkspaces(data.workspaces || []);
-        if (!readStored(WORKSPACE_KEY) && data.default) {
+        const list = data.workspaces || [];
+        setWorkspaces(list);
+        // 本地存的那个已经不在登记表里了 -> 落到默认那个，否则新对话没有落点。
+        const stored = readStored(WORKSPACE_KEY);
+        if (!list.some((entry) => entry.id === stored) && data.default) {
           writeStored(WORKSPACE_KEY, data.default);
           setWorkspaceId(data.default);
         }
@@ -252,14 +249,18 @@ export default function App() {
     setMessages([]);
   }
 
-  // 从侧栏切到另一场对话：换 id 即可，历史那个 effect 会把它拉回来
-  // （连同这场对话自己的设置 —— 是否使用工具是跟着对话走的）。
-  function selectSession(nextSessionId) {
-    if (nextSessionId === sessionId) {
+  // 从侧栏点一场对话：**连它所属的工作区一起切** —— 分组视图里能点到别的
+  // 工作区的对话，切过去之后「新对话」才落在对的地方。
+  function selectSession(session) {
+    if (session.workspaceId && session.workspaceId !== workspaceId) {
+      writeStored(WORKSPACE_KEY, session.workspaceId);
+      setWorkspaceId(session.workspaceId);
+    }
+    if (session.id === sessionId) {
       return;
     }
-    writeStoredSessionId(nextSessionId);
-    setSessionId(nextSessionId);
+    writeStoredSessionId(session.id);
+    setSessionId(session.id);
     setMessages([]);
   }
 

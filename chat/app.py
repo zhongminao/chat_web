@@ -464,14 +464,59 @@ def create_session(
 def list_sessions(
     workspaceId: str | None = None,
     ) -> dict:
-    """侧栏用的会话列表，按工作区过滤。
+    """会话列表。
 
-    切到别的工作区时不该还看见另一个工作区的对话，所以过滤放在服务端做。
+    默认返回**全部**工作区的会话，由前端按工作区分组渲染（对齐上游 sidebar 的
+    groupBy=workspace）。给了 workspaceId 仍然只返回那个工作区的 —— 接口保留
+    这个能力，只是界面不再用它。
+
+    workspace 是"没指定时用哪个"，前端拿它当新对话的落点。
     """
-    workspace = resolve_workspace(workspaceId)
     return {
-        "workspace": workspace,
-        "sessions": session_store.list_sessions(SESSION_DIR, workspace["id"]),
+        "workspace": resolve_workspace(workspaceId),
+        "sessions": session_store.list_sessions(SESSION_DIR, workspaceId),
+    }
+
+
+@app.get("/api/browse")
+def browse_directories(
+    path: str | None = None,
+    ) -> dict:
+    """列一个目录下的**子目录**，供"添加工作区"挑选。
+
+    为什么需要它：让用户手打绝对路径不叫交互。上游用的是 ui-directory-picker
+    那两个包（原生 + 浏览两种），这里做最小可用版：列出子目录、能往上走、选中即登记。
+
+    **只列目录名，不读文件内容。** 但要知道这仍是把文件系统的目录结构暴露给了
+    局域网 —— 本服务只在局域网可达，而 agent 本来就能用 run_bash 走到任何地方，
+    所以这不是新增的能力面，只是换了条路径。等做沙箱时这里要一起收紧。
+    """
+    base = Path(path).expanduser() if path else Path.home()
+    try:
+        base = base.resolve()
+    except OSError:
+        raise HTTPException(status_code=400, detail="bad path")
+    if not base.is_dir():
+        raise HTTPException(status_code=400, detail="not a directory")
+
+    entries: list[dict] = []
+    try:
+        for child in sorted(base.iterdir(), key=lambda item: item.name.lower()):
+            if child.name.startswith("."):
+                continue
+            try:
+                if child.is_dir():
+                    entries.append({"name": child.name, "path": str(child)})
+            except OSError:
+                continue
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="permission denied")
+
+    parent = base.parent
+    return {
+        "path": str(base),
+        "parent": str(parent) if parent != base else None,
+        "entries": entries,
     }
 
 

@@ -32,6 +32,17 @@ export async function createWorkspace(root) {
   return data.workspace;
 }
 
+// 目录浏览（添加工作区用）。只返回子目录名，不读文件内容。
+export async function browseDirectories(path) {
+  const query = path ? `?path=${encodeURIComponent(path)}` : "";
+  const response = await fetch(`/api/browse${query}`);
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.detail || "读不了这个目录");
+  }
+  return data;
+}
+
 // 还有对话引用它时服务端会拒绝（409）—— 那些对话会变成孤儿，找不到也回不来。
 export async function deleteWorkspace(workspaceId) {
   const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}`, {
