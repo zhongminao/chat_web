@@ -78,5 +78,5 @@ ss -ltnp '( sport = :8200 )'
 - `llm_client` 原先在 `tools/llm_client`（**无 git**），2026-09-12 并入本仓库 —— 此后
   一个仓库维护两个包。agent 能力演进路线图见 `llm_client/README.md`
 - 密钥与运行时配置**不进仓库**：真实文件在 `~/.config/{chat,fortrix}/` 与
-  `/usr/local/etc/cpolar/cpolar.yml`，仓库只应有模板。变量 → 文件的映射表见
+  `/usr/local/etc/cpolar/cpolar.yml`，仓库里连模板都不放。变量 → 文件的映射表见
   `config/README.md`（**chat 的公网密码在 cpolar.yml 里，不在 chat 进程里**）
