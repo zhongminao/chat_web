@@ -10,7 +10,9 @@ tools/chat/                      # 仓库根（git 在这一层）
 │   │   ├── pyproject.toml
 │   │   ├── demo_agent_loop.py   # agent 循环的可跑示例（假 client，不花钱）
 │   │   └── src/chat/
-│   │       ├── app.py           # FastAPI：会话 / 工作区 / 工具开关
+│   │       ├── app.py           # FastAPI：只留 HTTP（路由 + 请求响应模型）
+│   │       ├── runtime.py       # web 与 CLI 共用：路径 / 环境 / 消息归一 / 一轮对话
+│   │       ├── run.py           # CLI：python -m chat.run（不经过网页用 agent）
 │   │       ├── __main__.py      # 入口：python -m chat
 │   │       ├── openai_client.py # Client（无状态单次对话）
 │   │       ├── providers.yaml   # 供应商目录
@@ -34,6 +36,30 @@ systemctl --user restart chat                      # 常驻服务；日志 journ
 editable 记的是绝对路径，路径一换就 `No module named chat`（踩过）；`~/mydisk/web/chat`
 那个软链接同理，它不跟着 git 走。
 
+## 命令行用 agent（不经过网页）
+
+```bash
+python -m chat.run "把 workplace 里 README 的标题改掉"      # 一轮就退
+python -m chat.run --tools "跑一下测试，挂了就修"            # 这一轮允许用工具
+python -m chat.run -i                                      # 连着聊，exit 退出
+python -m chat.run --list                                  # 列出会话（网页里那些也在）
+python -m chat.run -s <会话id> "接着上次那个问题说"           # 续聊某一场
+```
+
+- **多轮**：不带 `-i` 也能多轮 —— 每次追加到同一场会话，下次调用时把历史读回来。
+  不带 `-s` 时用"上次 CLI 用的那场"（记在 `storage/cli-session`，第一次用 CLI 时创建），`--new` 另开一场。
+- **跟网页是同一套东西**：同一份消息归一、同一份一轮逻辑、同一份会话日志格式。
+  所以 CLI 里聊的在网页侧栏能看到，网页里聊的也能 `-s <id>` 接着聊。
+- **工作区**：默认是登记表里那个默认工作区（跟网页"新对话落在哪"一致），
+  `-w <id>` 换。工具就在它的根里干活 —— 相对路径的基准、`run_bash` 的 cwd 都是它。
+- **工具开关一场会话内固定**：第一轮 `--tools` 定下来，之后沿用日志里记的值。
+  不是限制，是因为关掉工具时 `normalize_messages` 会丢掉历史里的工具协议消息
+  （等于静默截断历史），所以服务端直接拒绝中途改，CLI 用同一条规矩。
+- 其它：`-p/-m` 换供应商/模型，`--system` 换系统提示词。
+
+实现上分了两层：`runtime.py`（路径 / 环境 / 消息归一 / 一轮对话，**不 import fastapi**）
+与 `app.py`（只留 HTTP：路由 + 请求响应模型）。两个入口共用前者，所以两边不会各飘一套。
+
 ## 前端构建
 
 ```bash
@@ -51,8 +77,8 @@ pnpm run check      # build + smoke（jsdom 里真跑一遍产物）
 
 | 变量 | 真实文件 | 谁在读 |
 |---|---|---|
-| `GPT_API_KEY` / `DEEPSEEK_API_KEY` / `LOCAL_QWEN_API_KEY` | `~/.bashrc` | `src/chat/app.py` 的 `ensure_runtime_env()` |
-| `CHAT_STORAGE` / `CHAT_WORKSPACE` | `chat.service` 的 `Environment=` | `src/chat/app.py`：运行时数据位置 / 默认工作区根 |
+| `GPT_API_KEY` / `DEEPSEEK_API_KEY` / `LOCAL_QWEN_API_KEY` | `~/.bashrc` | `src/chat/runtime.py` 的 `ensure_runtime_env()`（web 与 CLI 共用） |
+| `CHAT_STORAGE` / `CHAT_WORKSPACE` | `chat.service` 的 `Environment=` | `src/chat/runtime.py`：运行时数据位置 / 默认工作区根 |
 | `LOCAL_QWEN_MODEL_DIR` / `LOCAL_QWEN_MODEL_NAME` | **可选覆盖**，默认值在脚本里 | `start_local_qwen.sh` —— 只管**启动 vLLM 服务**，chat 不读它们 |
 
 - **`local_qwen` 默认一个环境变量都不用设**：base_url、模型名、api_key 都在 `providers.yaml`

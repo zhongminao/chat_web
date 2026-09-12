@@ -1,8 +1,5 @@
-import json
-import os
 import time
 from pathlib import Path
-from typing import NamedTuple
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
@@ -10,140 +7,33 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 
+# 路径 / 环境 / 消息归一 / 一轮对话 —— 全在 runtime.py，CLI 用的是同一份实现。
+# 这个文件只留 HTTP 那一层：请求响应模型 + 路由 + 静态文件。
+# 路由直接用这两个 store（runtime 里也用，但它不 re-export —— 直接用比再包一层清楚）
+from chat.agent import session_store, workspace_store
+from chat.runtime import (
+    DEFAULT_MODEL_NAME,
+    DEFAULT_PROVIDER,
+    SESSION_DIR,
+    WORKSPACE_DIR,
+    ChatMessage,
+    TurnRequest,
+    effective_system_prompt,
+    elapsed_ms,
+    ensure_default_workspace,
+    migrate_legacy_workspace_field,
+    request_real_reply,
+    resolve_workspace,
+)
+
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
-# 运行时数据（会话日志 + 工作区登记表）的位置。
-#
-# 以前是"跟着代码走"的：BASE_DIR.parent / "storage"。代码一挪（这次从仓库根挪进
-# packages/chat/），数据目录就跟着挪了 —— 表现是**历史对话凭空消失**（文件其实还在
-# 老地方），而且不报错。所以改成可以用 CHAT_STORAGE 钉死，默认值只当兜底：
-#   CHAT_STORAGE=<仓库>/storage  → 数据位置与代码位置解耦
-# 服务端在 systemd unit 里显式给了这个变量。
-# 位置由这里显式给出：不依赖仓库布局，代码怎么搬都不影响数据。
-_env_storage = os.environ.get("CHAT_STORAGE")
-STORAGE_DIR = (
-    Path(_env_storage).expanduser().resolve() if _env_storage else BASE_DIR.parent / "storage"
-)
-SESSION_DIR = STORAGE_DIR / "sessions"   # 会话日志就是状态本身
-WORKSPACE_DIR = STORAGE_DIR              # 工作区登记表 workspaces.json 放这
 
-# 默认工作区的根 —— **也是将来沙箱的默认边界**。
-#
-# 工作区现在是**实体**（id / 名字 / 根路径，登记在 storage/workspaces.json），
-# 会话的 header 里记的是它的 id 引用而不是路径快照。这个常量只在**登记表还空着**时
-# 用来兜底登记一条（第一次跑），不再每次启动都往回加 —— 否则用户删掉的工作区
-# 一重启就复活。想钉死默认根就用 CHAT_WORKSPACE。
-#
-# 现在仍然**没有任何东西读它来限制访问** —— 四个工具只是在它的根里操作（相对路径
-# 按它解析），绝对路径照样能走到任何地方。登记表的意义是让"允许 agent 活动的根"
-# 这件事有落点：沙箱将来要判断的正是"目标路径在不在某个工作区的根下面"。
-DEFAULT_WORKSPACE_ROOT = Path(os.environ.get("CHAT_WORKSPACE") or Path.cwd()).resolve()
-DEFAULT_PROVIDER = "gpt"
-DEFAULT_MODEL_NAME = "gpt-5.5"
-DEFAULT_TEMPERATURE = 0.2
-DEFAULT_SYSTEM_PROMPT = (
-    "You are a helpful assistant. "
-    "Keep context across turns and answer in the same language as the user when possible."
-)
-
-# 工具模式的系统提示词：告诉模型它可以调用工具、何时用哪个、有哪些行为规则。
-# 注意：不贴 JSON schema——工具定义走 API 的 tools 参数，这里只给可读的规则，
-# 避免与 chat/agent/tools.py 里的实现重复维护而漂移。
-TOOL_SYSTEM_PROMPT = (
-    "You are an agent that can take real actions through tools. "
-    "Tools available: "
-    "read_file — read any UTF-8 text file (page large files with offset/limit); "
-    "write_file — create a new file or fully overwrite one, parent directories "
-    "are created automatically (use ONLY for new files or complete rewrites); "
-    "edit_file — replace exactly one text block in an existing file "
-    "(old_text must be copied verbatim from read_file output, never invented); "
-    "run_bash — execute a shell command (ls, grep, git, run programs). "
-    "Rules: always read a file before editing or quoting it; never invent file "
-    "contents; prefer run_bash for listing/searching/git; for multi-step or "
-    "environment-sensitive work (conda activate, long scripts), do not chain "
-    "fragile one-liners: write a run_task.sh with write_file, review it with "
-    "read_file, then run it with 'bash run_task.sh'. When the task is done, "
-    "reply concisely in the user's language and summarize what you read, wrote, "
-    "edited, or ran."
-)
-
-from chat import (
-    create_client,
-    get_model_temperature,
-    list_providers,
-    load_provider_catalog,
-)
-from chat.agent import (
-    make_executor,
-    run_agent_turn,
-    session_store,
-    workspace_store,
-)
-
-# 启动时**只在登记表还空着**（第一次跑、或文件被清掉）时把默认工作区登记进去。
-#
-# 以前这里是无条件 ensure —— 效果是"你删掉的工作区，重启服务就回来了"：ensure 见
-# 根路径不在表里就追加一条，而默认根就是服务进程的 cwd。删了一个自己不需要的
-# 工作区，下次重启它又在那儿，而且没有任何提示。（这个坑是用户报的：他只想留
-# workplace，删掉 chat 之后一重启 chat 又出现了。）
-#
-# 现在只在空表时兜底：登记表是用户的意图，服务不该替他往回加。
-if not workspace_store.load(WORKSPACE_DIR):
-    workspace_store.ensure(WORKSPACE_DIR, DEFAULT_WORKSPACE_ROOT)
-
-
-def migrate_legacy_workspace_field() -> int:
-    """老会话的 header 里记的是工作目录**路径**（那时工作区还只是个常量），
-    现在记的是工作区 id 引用。把只有路径的那些补上 workspaceId。
-
-    幂等：补过的不会再动。只改首行，写临时文件后原子替换 —— 不这样万一半路挂了
-    会留下半截文件，而那是你的对话记录。
-
-    补不上的（路径不在登记表里）原样留着，不猜。
-    """
-    migrated = 0
-    for path in SESSION_DIR.glob("*.jsonl"):
-        try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-            if not lines:
-                continue
-            header = json.loads(lines[0])
-            if header.get("type") != "session" or header.get("workspaceId"):
-                continue
-            entry = workspace_store.by_root(WORKSPACE_DIR, header.get("workspace") or "")
-            if entry is None:
-                continue
-            header["workspaceId"] = entry["id"]
-            lines[0] = json.dumps(header, ensure_ascii=False)
-            temp_path = path.with_name(path.name + ".tmp")
-            temp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            os.chmod(temp_path, 0o600)
-            os.replace(temp_path, path)
-            migrated += 1
-        except Exception:
-            continue
-    return migrated
-
-
+ensure_default_workspace()
 MIGRATED_SESSIONS = migrate_legacy_workspace_field()
 
 
-class TurnResult(NamedTuple):
-    reply: str
-    steps: list
-    # 本轮新增的协议消息（assistant tool_calls + tool 结果 + 最终文本），
-    # 落盘时存成日志里的 "protocol" 字段 —— 两个名字指同一件东西，
-    # 存储键叫 protocol 是因为它描述的是"重发用的协议消息"，别改名（已有历史按它读）。
-    protocol_messages: list
-    messages: list       # 实际发给模型的消息（含拼好的 system）
-    temperature: float   # 生效值：payload 没给时来自 providers.yaml
 
-
-class ChatMessage(BaseModel):
-    role: str = Field(min_length=1)
-    content: str = ""                  # assistant(tool_calls) 消息可能无正文，允许空
-    tool_calls: list | None = None     # 协议回放：assistant 声明的工具调用列表
-    tool_call_id: str | None = None    # 协议回放：tool 结果消息配对用
 
 
 class ChatRequest(BaseModel):
@@ -157,6 +47,17 @@ class ChatRequest(BaseModel):
     temperature: float | None = None  # None → 使用 providers.yaml 里该模型的默认温度
     system_prompt: str | None = None   # None → 用 DEFAULT_SYSTEM_PROMPT；"" → 一条 system 都不发
     tools_enabled: bool = False        # True → 附带工具并允许模型调用
+
+    def to_turn_request(self) -> TurnRequest:
+        """只取"与传输方式无关"的部分，交给 runtime 跑（CLI 同样构造 TurnRequest）。"""
+        return TurnRequest(
+            messages=self.messages,
+            provider=self.provider,
+            model_name=self.model_name,
+            system_prompt=self.system_prompt,
+            tools_enabled=self.tools_enabled,
+            temperature=self.temperature,
+        )
 
 
 class WorkspaceRequest(BaseModel):
@@ -200,187 +101,6 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 # 就必须把应用层鉴权加回来。
 
 
-def load_env_value_from_bashrc(
-    key_name: str,
-    ) -> None:
-    if key_name in os.environ and os.environ[key_name].strip():
-        return
-
-    bashrc_path = Path.home() / ".bashrc"
-    if not bashrc_path.exists():
-        return
-
-    lines = bashrc_path.read_text(encoding="utf-8").splitlines()
-    prefix = f'export {key_name}="'
-
-    for line in lines:
-        stripped_line = line.strip()
-        if not stripped_line.startswith(prefix):
-            continue
-
-        value = stripped_line[len(prefix):]
-        quote_index = value.find('"')
-        if quote_index >= 0:
-            value = value[:quote_index]
-
-        value = value.strip()
-        if value:
-            os.environ[key_name] = value
-        return
-
-
-def ensure_runtime_env(
-    provider: str,
-    ) -> None:
-    """把这个供应商的 API key 从 ~/.bashrc 读进 os.environ。
-
-    **"哪个 provider 用哪个环境变量"的唯一来源是 `providers.yaml` 的 `api_key_env`。**
-
-    这里以前是一串硬编码的 if（gpt → GPT_API_KEY，deepseek → …），等于同一件事在
-    yaml 和代码里各写一份。两份必须保持一致，但不一致时**不会报错** —— 只会静默读不到
-    key，最后以一个 401 收场。现在只剩 yaml 一份：加供应商、改变量名都只动那个文件。
-
-    provider 不认识时**不在这里报错**，直接返回：这个函数的职责只是填环境变量，
-    "不支持的供应商"该由 create_client 去说（错误信息与时机都保持原样）。
-
-    注意读的是**文件**而不是继承环境：服务由 systemd 启动，继承不到终端的 shell 环境。
-    """
-    entry = load_provider_catalog().get(str(provider).strip().lower()) or {}
-    key_name = entry.get("api_key_env")
-    if key_name:
-        load_env_value_from_bashrc(key_name)
-
-
-def normalize_messages(
-    messages: list[ChatMessage],
-    system_prompt: str | None = None,
-    tools_enabled: bool = False,
-    ) -> list[dict]:
-    # None 和 "" 在业务上是两回事：
-    #   None（请求里根本没有 system_prompt 字段）→ 调用方没表态 → 后端代拼默认
-    #   ""（传了空字符串）                        → 调用方明确表示不要 → 一条 system 都不发
-    # 传了非空内容 → 原样发送（所见即所得）：面板写什么，模型就看到什么。
-    # 工具模式同样不自动拼接，避免"UI 看不到却实际发送"的歧义；
-    # 想要工具说明，把 TOOL_SYSTEM_PROMPT（/api/providers 返回 tool_system_prompt）粘进面板即可。
-    normalized_messages: list[dict] = []
-
-    if system_prompt is None:
-        # 字段缺失（调用方没表态）→ 后端代拼默认：
-        #   工具模式 = 工具说明 + 默认基础提示词；普通模式 = 默认基础提示词
-        if tools_enabled:
-            system_content = f"{TOOL_SYSTEM_PROMPT}\n\n{DEFAULT_SYSTEM_PROMPT}"
-        else:
-            system_content = DEFAULT_SYSTEM_PROMPT
-        normalized_messages.append(
-            {
-                "role": "system",
-                "content": system_content,
-            }
-        )
-    elif system_prompt.strip():
-        normalized_messages.append(
-            {
-                "role": "system",
-                "content": system_prompt.strip(),
-            }
-        )
-    # 剩下的情况（空字符串或纯空白）什么都不加：这一轮请求没有 system 消息
-
-    for message in messages:
-        if message.role == "system":
-            continue
-        # 未启用工具时，历史里可能残留上一轮的工具协议消息
-        # （assistant 带 tool_calls / role=tool），此时请求不带 tools 参数，
-        # 发给模型会被严格服务拒收 → 直接丢弃，只留纯文本对话。
-        if not tools_enabled and (message.role == "tool" or message.tool_calls):
-            continue
-        entry: dict = {
-            "role": message.role,
-            "content": message.content,
-        }
-        if message.tool_calls:
-            entry["tool_calls"] = message.tool_calls
-        if message.tool_call_id:
-            entry["tool_call_id"] = message.tool_call_id
-        normalized_messages.append(entry)
-    return normalized_messages
-
-
-def elapsed_ms(
-    started: float,
-    ) -> int:
-    return int((time.monotonic() - started) * 1000)
-
-
-def effective_system_prompt(
-    normalized_messages: list[dict],
-    ) -> str | None:
-    """归一化后真正发给模型的那条 system 消息；没有则 None。
-
-    记这个而不是请求里的 system_prompt 原值：那个可能是 None（用默认提示词）或 ""
-    （一条 system 都不发），两个都不等于模型实际看到的东西。
-    """
-    for message in normalized_messages:
-        if message.get("role") == "system":
-            return message.get("content")
-    return None
-
-
-def request_real_reply(
-    payload: ChatRequest,
-    prior_messages: list[ChatMessage],
-    workspace_root: str | None = None,
-    ) -> "TurnResult":
-    ensure_runtime_env(payload.provider)
-    temperature = payload.temperature
-    if temperature is None:
-        temperature = get_model_temperature(
-            provider=payload.provider,
-            model_name=payload.model_name,
-        )
-    client = create_client(
-        provider=payload.provider,
-        model_name=payload.model_name,
-        temperature=temperature,
-    )
-    # 历史（prior_messages）由会话日志重放，拼上本轮新增的消息，再走 normalize_messages。
-    # 归一化只有这一条路径，不另写一份。
-    combined = [*prior_messages, *payload.messages]
-    normalized_messages = normalize_messages(
-        combined,
-        payload.system_prompt,
-        tools_enabled=payload.tools_enabled,
-    )
-    if payload.tools_enabled:
-        # agent 模式：多轮工具调用，直到模型直接回答。
-        # 工具在**这场会话所属工作区的根**里干活 —— 相对路径按它解析、bash 在它里面跑。
-        # 这就是"切工作区"的实际含义：不传 root 的话四个工具都按服务进程的 cwd 走，
-        # 界面上选哪个工作区都一样（那正是以前的 bug）。
-        reply, steps, protocol_messages = run_agent_turn(
-            client,
-            normalized_messages,
-            execute_tool=make_executor(workspace_root),
-        )
-    else:
-        assistant_message, _ = client.request_assistant_message(
-            messages=normalized_messages,
-        )
-        reply = str(assistant_message["content"])
-        steps = []
-        # protocol_messages 的不变式：本轮产生的协议消息，**总以最终 assistant 消息结尾**。
-        # 非工具模式过去返回 []，后果是回放的历史里没有 assistant 轮 ——
-        # 前端 protocol 只收 user 消息，模型记不住自己说过什么（会话日志同样缺）。
-        protocol_messages = [{"role": "assistant", "content": reply}]
-
-    return TurnResult(
-        reply=reply,
-        steps=steps,
-        protocol_messages=protocol_messages,
-        messages=normalized_messages,
-        temperature=temperature,
-    )
-
-
 @app.get("/")
 def index(
     ) -> FileResponse:
@@ -422,22 +142,6 @@ def resolve_session_id(
     if session_id is None:
         raise HTTPException(status_code=400, detail="invalid sessionId")
     return session_id
-
-
-def resolve_workspace(
-    workspace_id: str | None,
-    ) -> dict:
-    """按客户端给的 workspaceId 找登记过的工作区；给空或找不到就回落到默认那个。
-
-    刻意**不报错**：一个指向已删工作区的 id，回落到默认比让请求失败更合理。
-    """
-    entry = workspace_store.by_id(WORKSPACE_DIR, workspace_id) if workspace_id else None
-    if entry is not None:
-        return entry
-    fallback = workspace_store.default(WORKSPACE_DIR)
-    if fallback is None:
-        fallback = workspace_store.ensure(WORKSPACE_DIR, DEFAULT_WORKSPACE_ROOT)
-    return fallback
 
 
 @app.get("/api/workspaces")
@@ -692,7 +396,7 @@ def chat(
     ]
 
     try:
-        result = request_real_reply(payload, prior_messages, workspace_root)
+        result = request_real_reply(payload.to_turn_request(), prior_messages, workspace_root)
     except Exception as exc:
         # 失败时**不往历史里写 user 消息**：那条提问没有对应的回答，留在历史里
         # 会让重试把同一句话追加第二遍。失败只记在 turn 记录里（turn 不是历史类型，
