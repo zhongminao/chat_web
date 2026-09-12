@@ -274,8 +274,9 @@ export default function App() {
     clearMessages();
   }
 
-  async function addWorkspace(root) {
-    const entry = await createWorkspace(root);
+  // 登记一个已存在的目录，或在某个目录下新建一个再登记（后者由选择器传 parent+name）。
+  async function addWorkspace(payload) {
+    const entry = await createWorkspace(payload);
     await refreshWorkspaces();
     selectWorkspace(entry.id);
     return entry;

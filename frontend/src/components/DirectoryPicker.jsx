@@ -12,6 +12,9 @@ export default function DirectoryPicker({ open, onClose, onConfirm }) {
   const [listing, setListing] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  // 新建工作区：在当前位置下开一个新目录并登记。不该逼用户先去终端 mkdir。
+  const [creating, setCreating] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
 
   // 每次打开都从 home 重新开始，不记得上次走到哪 —— 记着反而容易误选。
   useEffect(() => {
@@ -20,6 +23,8 @@ export default function DirectoryPicker({ open, onClose, onConfirm }) {
     }
     setError("");
     setPath("");
+    setCreating(false);
+    setNameDraft("");
   }, [open]);
 
   useEffect(() => {
@@ -29,9 +34,17 @@ export default function DirectoryPicker({ open, onClose, onConfirm }) {
     let cancelled = false;
     browseDirectories(path)
       .then((data) => {
-        if (!cancelled) {
-          setListing(data);
+        if (cancelled) {
+          return;
         }
+        // 服务端回了个不认识的形状就当读不出来。别让 entries 缺失把整个界面带崩 ——
+        // 这里是「少个字段」，不该表现成白屏。
+        if (!data || typeof data.path !== "string") {
+          setListing(null);
+          setError("这个目录读不出来");
+          return;
+        }
+        setListing({ ...data, entries: Array.isArray(data.entries) ? data.entries : [] });
       })
       .catch((browseError) => {
         if (!cancelled) {
@@ -53,9 +66,24 @@ export default function DirectoryPicker({ open, onClose, onConfirm }) {
     }
     setBusy(true);
     try {
-      await onConfirm(listing.path);
+      await onConfirm({ root: listing.path });
     } catch (confirmError) {
       setError(confirmError.message);
+      setBusy(false);
+    }
+  }
+
+  async function submitCreate(event) {
+    event.preventDefault();
+    const name = nameDraft.trim();
+    if (!name || !listing?.path) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await onConfirm({ parent: listing.path, name });
+    } catch (createError) {
+      setError(createError.message);
       setBusy(false);
     }
   }
@@ -95,18 +123,48 @@ export default function DirectoryPicker({ open, onClose, onConfirm }) {
 
         {error ? <div className="modal-error">{error}</div> : null}
 
+        {/* 左下角是"新建工作区"，右下角是取消/确认 —— 两类动作分开摆，
+            免得"建一个新的"和"就要这个"挨在一起被误点。 */}
         <div className="modal-actions">
-          <button type="button" className="secondary-button" onClick={onClose}>
-            取消
-          </button>
-          <button
-            type="button"
-            className="primary-button"
-            onClick={confirm}
-            disabled={busy || !listing?.path}
-          >
-            选这个目录
-          </button>
+          <div className="modal-actions-left">
+            {creating ? (
+              <form className="picker-create" onSubmit={submitCreate}>
+                <input
+                  autoFocus
+                  value={nameDraft}
+                  onChange={(event) => setNameDraft(event.target.value)}
+                  placeholder="新目录名"
+                  aria-label="新工作区目录名"
+                />
+                <button type="submit" className="secondary-button" disabled={busy || !nameDraft.trim()}>
+                  建
+                </button>
+              </form>
+            ) : (
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() => setCreating(true)}
+                disabled={!listing?.path}
+              >
+                新建工作区
+              </button>
+            )}
+          </div>
+
+          <div className="modal-actions-right">
+            <button type="button" className="secondary-button" onClick={onClose}>
+              取消
+            </button>
+            <button
+              type="button"
+              className="primary-button"
+              onClick={confirm}
+              disabled={busy || !listing?.path}
+            >
+              选这个目录
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -370,22 +370,44 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-.group-toggle {
+/* 整行是按钮（上游 projectRow：行本身是开关），图标只是它的第一个孩子。 */
+.group-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.group-icon {
   flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 20px;
-  height: 20px;
-  padding: 0;
-  border: none;
-  background: transparent;
   color: var(--dsw-alias-label-tertiary);
-  cursor: pointer;
 }
 
-.group-header.is-current .group-toggle {
+.group-header.is-current .group-icon {
   color: var(--dsw-alias-state-business-primary);
+}
+
+.group-actions {
+  flex: none;
+  display: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.group-header:hover .group-actions {
+  display: inline-flex;
 }
 
 .group-name {
@@ -450,22 +472,44 @@
   background: var(--dsw-alias-interactive-bg-hover);
 }
 
-.group-toggle {
+/* 整行是按钮（上游 projectRow：行本身是开关），图标只是它的第一个孩子。 */
+.group-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.group-icon {
   flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 20px;
-  height: 20px;
-  padding: 0;
-  border: none;
-  background: transparent;
   color: var(--dsw-alias-label-tertiary);
-  cursor: pointer;
 }
 
-.group-header.is-current .group-toggle {
+.group-header.is-current .group-icon {
   color: var(--dsw-alias-state-business-primary);
+}
+
+.group-actions {
+  flex: none;
+  display: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.group-header:hover .group-actions {
+  display: inline-flex;
 }
 
 .group-name {
@@ -1502,10 +1546,54 @@
   color: var(--dsw-alias-state-business-primary);
 }
 
+/* 左下角放"新建工作区"，右下角放取消/确认 —— 两类动作分开摆，
+   免得"建一个新的"和"就要这个"挨在一起被误点。
+
+   .secondary-button 是 sm 档（28px 高 / 12px 字 / r14），.primary-button 是 md 档
+   （36px / 14px / r18）—— 直接并排就是"一高一低"。上游按钮的尺寸是**档位**不是零散
+   数值，弹窗动作栏里两个按钮属于同一档（都按 md），所以这里整套换成 md：只统一高度
+   会把字号和圆角落下，一样看着是两种按钮。 */
 .modal-actions {
   flex: none;
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
   margin-top: 14px;
+}
+
+.modal-actions-left,
+.modal-actions-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-actions .secondary-button,
+.modal-actions .primary-button {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 18px;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.picker-create {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.picker-create input {
+  width: 170px;
+  height: 36px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: var(--dsw-alias-button-elevated-fill);
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
 }

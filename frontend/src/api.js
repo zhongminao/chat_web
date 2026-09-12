@@ -19,16 +19,17 @@ export async function fetchWorkspaces() {
   return response.json();
 }
 
-export async function createWorkspace(root) {
+// 两种用法：{root} 登记已存在的目录；{parent, name} 新建目录再登记。
+export async function createWorkspace(payload) {
   const response = await fetch("/api/workspaces", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ root }),
+    body: JSON.stringify(payload),
   });
+  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error("路径不是一个存在的目录");
+    throw new Error(data.detail || "登记工作区失败");
   }
-  const data = await response.json();
   return data.workspace;
 }
 

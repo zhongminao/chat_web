@@ -130,7 +130,10 @@ class ChatRequest(BaseModel):
 
 
 class WorkspaceRequest(BaseModel):
-    root: str = Field(min_length=1)
+    # 两种用法：给 root 登记一个已存在的目录；或给 parent + name 新建一个目录再登记。
+    root: str | None = None
+    parent: str | None = None
+    name: str | None = None
 
 
 class SessionSettingsRequest(BaseModel):
@@ -408,11 +411,36 @@ def list_workspaces(
 def create_workspace(
     payload: WorkspaceRequest,
     ) -> dict:
-    """按路径登记一个工作区。同一个目录重复登记会返回原来那条（id 由路径哈希得来）。
+    """登记一个工作区。同一个目录重复登记会返回原来那条（id 由路径哈希得来）。
 
-    只要求"是个存在的目录"。等做沙箱时，这里才是要收紧的地方（比如只允许
-    HOME 下面、或只允许预先登记过的根）。
+    两种用法：
+      root            登记一个**已存在**的目录
+      parent + name   在 parent 下**新建**一个目录再登记 —— 不该逼用户先自己去 mkdir
+
+    只要求"是个目录"。等做沙箱时这里才是要收紧的地方（比如只允许 HOME 下面）——
+    注意这条和 /api/browse 一样，是会写盘、且暴露在局域网上的入口。
     """
+    if payload.name is not None:
+        parent = Path(payload.parent or Path.home()).expanduser()
+        if not parent.is_dir():
+            raise HTTPException(status_code=400, detail="parent is not a directory")
+
+        # 名字只能是单个目录名：挡掉 "../x" 这类想跳出 parent 的写法。不做"尽力清洗"，直接拒。
+        name = payload.name.strip()
+        if not name or name in {".", ".."} or "/" in name or "\\" in name:
+            raise HTTPException(status_code=400, detail="invalid workspace name")
+
+        target = parent / name
+        if target.exists():
+            raise HTTPException(status_code=409, detail="已经存在同名目录")
+        try:
+            target.mkdir()      # 只建一级：parent 必须已存在，免得凭空造出一串
+        except OSError as exc:
+            raise HTTPException(status_code=400, detail=f"建目录失败：{exc}") from exc
+        return {"workspace": workspace_store.ensure(WORKSPACE_DIR, target)}
+
+    if not payload.root:
+        raise HTTPException(status_code=400, detail="root or name is required")
     root = Path(payload.root).expanduser()
     if not root.is_dir():
         raise HTTPException(status_code=400, detail="not an existing directory")

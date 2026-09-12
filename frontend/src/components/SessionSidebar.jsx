@@ -212,39 +212,58 @@ export default function SessionSidebar({
             const isOpen = expanded[group.workspace.id] !== false;
             return (
               <section key={group.workspace.id || "__orphan"} className="group">
-                <div
-                  className={isCurrent ? "group-header is-current" : "group-header"}
-                  onClick={() => group.workspace.id && onSelectWorkspace(group.workspace.id)}
-                  title={group.workspace.root || group.workspace.name}
-                >
+                {/* 整行点击 = 折叠/展开（上游 projectRow 就是这么做的：行本身是开关）。
+                    以前只有那个 20px 的小文件夹能点，等于没有折叠功能。
+                    「在这个工作区新建对话」和「删除」做成 hover 才出现的行内操作。 */}
+                <div className={isCurrent ? "group-header is-current" : "group-header"}>
                   <button
                     type="button"
-                    className="group-toggle"
-                    onClick={(event) => {
-                      event.stopPropagation();
+                    className="group-main"
+                    onClick={() =>
                       setExpanded((state) => ({
                         ...state,
                         [group.workspace.id]: !isOpen,
-                      }));
-                    }}
-                    aria-label={isOpen ? "收起" : "展开"}
+                      }))
+                    }
                     aria-expanded={isOpen}
+                    aria-label={`${isOpen ? "收起" : "展开"} ${group.workspace.name}`}
+                    title={group.workspace.root || group.workspace.name}
                   >
-                    {isOpen ? <IconFolderOpen16 size={16} /> : <IconFolderClose16 size={16} />}
+                    <span className="group-icon">
+                      {isOpen ? <IconFolderOpen16 size={16} /> : <IconFolderClose16 size={16} />}
+                    </span>
+                    <span className="group-name">{group.workspace.name}</span>
                   </button>
-                  <span className="group-name">{group.workspace.name}</span>
+
                   <span className="group-count">{group.sessions.length}</span>
-                  {group.workspace.id ? (
-                    <button
-                      type="button"
-                      className="row-action"
-                      onClick={(event) => removeWorkspace(event, group.workspace)}
-                      aria-label={`删除工作区 ${group.workspace.name}`}
-                      title="删除这个工作区（里面还有对话时会失败）"
-                    >
-                      <IconTrashOutline16 size={14} />
-                    </button>
-                  ) : null}
+
+                  <div className="group-actions">
+                    {group.workspace.id ? (
+                      <button
+                        type="button"
+                        className="row-action"
+                        onClick={() => {
+                          onSelectWorkspace(group.workspace.id);
+                          onNew();
+                        }}
+                        aria-label={`在 ${group.workspace.name} 新建对话`}
+                        title="在这个工作区新建对话"
+                      >
+                        <IconNewChatOutline16 size={14} />
+                      </button>
+                    ) : null}
+                    {group.workspace.id ? (
+                      <button
+                        type="button"
+                        className="row-action"
+                        onClick={(event) => removeWorkspace(event, group.workspace)}
+                        aria-label={`删除工作区 ${group.workspace.name}`}
+                        title="删除这个工作区（里面还有对话时会失败）"
+                      >
+                        <IconTrashOutline16 size={14} />
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
 
                 {isOpen

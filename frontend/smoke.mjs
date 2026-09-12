@@ -3,13 +3,15 @@
  * 存在的理由：这个环境里没有浏览器，前端改动此前只能靠人肉点。而 React 的失败方式
  * 很安静（白屏 / 一个空 div），光看接口返回发现不了。
  *
- * 三个场景，各自是一个新 JSDOM：
+ * 四个场景，各自是一个新 JSDOM：
  *   1. 全新会话   —— 能渲染、会自己生成 sessionId
  *   2. 恢复历史   —— localStorage 里有 id 时，把服务端的历史拉回来并渲染出来
  *   3. 存储不可用 —— localStorage 抛异常时**仍然能渲染**（不能白屏）
+ *   4. 侧栏收起   —— 收起态下只剩窄条，不能还去断言展开态才有的东西
  *
- * 刻意只做"能不能起来"这一层：不测交互、不测样式。够抓住"bundle 坏了/组件抛了"
- * 这类事故，也就是重构时最常见的那种。
+ * 断言分两层：先"能不能起来"（白屏 / 组件抛异常），再点几下验证交互真的接上了
+ * （分组折叠、搜索过滤、目录选择器、工具开关写回）。样式管不了 —— jsdom 不算布局，
+ * 高度对齐这类事只能靠人眼，别在这里假装测了。
  *
  *   node smoke.mjs
  */
@@ -56,6 +58,17 @@ const sessionList = {
   ],
 };
 
+/* 目录选择器调的接口。entries 必须给真数组 —— 少了这个字段，组件里
+ * listing.entries.length 会当场抛异常，整个界面白屏（这里踩过）。 */
+const browsePayload = {
+  path: "/home/zhong",
+  parent: "/home",
+  entries: [
+    { name: "proj", path: "/home/zhong/proj" },
+    { name: "notes", path: "/home/zhong/notes" },
+  ],
+};
+
 let failures = 0;
 
 async function scenario(name, { withUrl = true, seedSession = null, sessionItems = null, collapsed = false, expectTools = false, expectLocked = false } = {}) {
@@ -93,7 +106,9 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
     // 三个接口的路径要分清：/api/workspaces、/api/sessions（可带 ?workspaceId=）、
     // /api/sessions/<id>。用 includes 一刀切会把它们搞混。
     let body = providers;
-    if (target.includes("/api/workspaces")) {
+    if (target.includes("/api/browse")) {
+      body = browsePayload;
+    } else if (target.includes("/api/workspaces")) {
       body = workspacePayload;
     } else if (target.includes("/api/sessions/")) {
       body = sessionItems ?? {};
@@ -168,6 +183,61 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
           `实得 ${JSON.stringify(window.document.querySelector(".group-name")?.textContent)}`);
     const searchInput = window.document.querySelector(".section-search-input");
     check("区块头有搜索输入框", !!searchInput);
+
+    // 分组折叠：点组头的折叠按钮，它下面的会话行应当消失；再点回来。
+    const groupToggle = window.document.querySelector(".group-main");
+    const rowsBefore = window.document.querySelectorAll(".session-item").length;
+    groupToggle?.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const rowsCollapsed = window.document.querySelectorAll(".session-item").length;
+    groupToggle?.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const rowsBack = window.document.querySelectorAll(".session-item").length;
+    check("分组可以折叠",
+          rowsBefore > 0 && rowsCollapsed === 0 && rowsBack === rowsBefore,
+          `${rowsBefore} -> ${rowsCollapsed} -> ${rowsBack}`);
+
+    // 添加工作区：点 ＋ 应弹出目录选择器。
+    const addButton = [...window.document.querySelectorAll(".section-icon-button")]
+      .find((el) => el.getAttribute("aria-label") === "添加工作区");
+    addButton?.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const modal = window.document.querySelector(".modal");
+    check("点 ＋ 弹出目录选择器", !!modal);
+    // 光有壳不算数：接口给的子目录要真的列出来，否则选择器是个空盒子。
+    const rowNames = [...(modal?.querySelectorAll(".picker-row-name") || [])]
+      .map((el) => el.textContent.trim());
+    check("选择器列出了接口返回的子目录",
+          rowNames.includes("proj") && rowNames.includes("notes"),
+          `实得 ${JSON.stringify(rowNames)}`);
+
+    // 用户要求：左下角「新建工作区」，右下角取消/确认，且两者同处一行。
+    // jsdom 没有布局，"一个高一个低"测不出来，但**结构**能测：同容器 + 先后顺序。
+    const actions = modal?.querySelector(".modal-actions");
+    const left = modal?.querySelector(".modal-actions-left");
+    const right = modal?.querySelector(".modal-actions-right");
+    const buttonIn = (scope, label) =>
+      [...(scope?.querySelectorAll("button") || [])]
+        .some((el) => el.textContent.trim() === label);
+    check("左下角有「新建工作区」", buttonIn(left, "新建工作区"),
+          `左下角实得 ${JSON.stringify([...(left?.querySelectorAll("button") || [])].map((e) => e.textContent.trim()))}`);
+    check("右下角有取消与确认",
+          buttonIn(right, "取消") && buttonIn(right, "选这个目录"));
+    check("两组动作在同一个动作栏里（不是上下两行）",
+          !!actions && !!left && !!right && left.parentElement === actions
+          && right.parentElement === actions
+          && (left.compareDocumentPosition(right) & window.Node.DOCUMENT_POSITION_FOLLOWING) !== 0);
+
+    // 新建分支：点一下要出输入框，不是个死按钮。
+    [...(left?.querySelectorAll("button") || [])]
+      .find((el) => el.textContent.trim() === "新建工作区")?.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    check("点「新建工作区」出目录名输入框",
+          !!modal?.querySelector(".picker-create input"),
+          `实得 ${JSON.stringify(modal?.querySelector(".picker-create")?.innerHTML || "")}`);
+
+    window.document.querySelector(".modal-backdrop")?.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
     // 搜索得**真的过滤**，只断言输入框存在证明不了。
     // 直接赋 value 不会触发 React 的 onChange —— 它自己有个 value tracker，
