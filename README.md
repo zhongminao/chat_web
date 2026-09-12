@@ -6,19 +6,29 @@ React + FastAPI 聊天应用：前端负责展示和提交对话，后端通过 
 
 ```
 tools/chat/
-├── pyproject.toml          # 包元数据（deps: fastapi/uvicorn/pydantic/llm-client）
+├── pyproject.toml          # chat 包元数据（deps: fastapi/uvicorn/pydantic/llm-client）
 ├── chat/
 │   ├── __main__.py         # 启动入口（python -m chat）
 │   ├── app.py              # FastAPI 后端
 │   └── static/             # React 前端（index.html / main.jsx / styles.css）
+├── llm_client/             # 独立可安装的 LLM 客户端库（零项目依赖，仅 openai+pyyaml）
+│   ├── pyproject.toml
+│   └── llm_client/
+│       ├── openai_client.py    # Client + ConversationSession
+│       ├── providers.yaml      # 供应商目录
+│       └── agent/              # agent 循环 + 四个工具（路线图见该包 README）
 └── start_local_qwen.sh     # 本地 Qwen3.5-2B vLLM 服务
 ```
+
+**一个仓库、两个包**：`chat` 是 Web 应用，`llm_client` 是库。二者通过 `trace` 契约耦合
+（循环产出 → 接口转出 → 前端回放），改动经常跨包，所以 git 合在一起、包各自独立。
 
 ## 启动
 
 ```bash
-pip install -e ~/mydisk/tools/chat    # 首次安装（改代码后无需重装，editable）
-python -m chat [port]                 # 任意目录下启动，默认端口 8200
+pip install -e ~/mydisk/tools/chat             # chat 应用
+pip install -e ~/mydisk/tools/chat/llm_client  # llm-client 库（装一次即可）
+python -m chat [port]                          # 任意目录下启动，默认端口 8200
 ```
 
 打开：
@@ -60,3 +70,7 @@ ss -ltnp '( sport = :8200 )'
 
 - `~/mydisk/web/chat` 现在是**软链接**，指向本目录（旧路径兼容，可放心使用）
 - git 历史已随迁移保留（tools/chat/.git）
+- `llm_client` 原先在 `tools/llm_client`（**无 git**），2026-09-12 并入本仓库 —— 此后
+  一个仓库维护两个包。agent 能力演进路线图见 `llm_client/README.md`
+- 密钥与运行时配置**不进仓库**：真实文件在 `~/.config/{chat,fortrix}/` 与
+  `/usr/local/etc/cpolar/cpolar.yml`，仓库只应有 `*.env.example` 模板
