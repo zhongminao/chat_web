@@ -258,7 +258,7 @@ export default function SessionSidebar({
                         className="row-action"
                         onClick={(event) => removeWorkspace(event, group.workspace)}
                         aria-label={`删除工作区 ${group.workspace.name}`}
-                        title="删除这个工作区（里面还有对话时会失败）"
+                        title="删除这个工作区（里面还有对话就删不了）"
                       >
                         <IconTrashOutline16 size={14} />
                       </button>

@@ -75,6 +75,9 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
   const pageErrors = [];
   const fetchCalls = [];
   const patched = [];
+  // 每个场景一份可变的登记表：DELETE 之后要真的少一项，否则"删完列表还在"这种
+  // bug 测不出来（stub 原样返回旧列表就等于假装删成功了）。
+  let workspaces = workspacePayload.workspaces.map((entry) => ({ ...entry }));
 
   const dom = new JSDOM(html, {
     // url 不能省：jsdom 默认 origin 是 about:blank（不透明 origin），访问 localStorage
@@ -109,7 +112,7 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
     if (target.includes("/api/browse")) {
       body = browsePayload;
     } else if (target.includes("/api/workspaces")) {
-      body = workspacePayload;
+      body = { workspaces, default: workspaces[0]?.id };
     } else if (target.includes("/api/sessions/")) {
       body = sessionItems ?? {};
     } else if (target.includes("/api/sessions")) {
@@ -259,6 +262,26 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
       check("搜得到时列表恢复", (root.textContent || "").includes("侧栏里的会话标题"));
       type("");
     }
+
+    // ---- 删除工作区 ----
+    // 补一次真实事故：删除入口曾经**永远看不见** —— .row-action 自己带着
+    // display:none，而唯一负责显示它的选择器指向已经被删掉的旧菜单
+    // .workspace-option。结果容器被 hover 出来了，里面的按钮还是不显示。
+    //
+    // jsdom 不算外部样式表的布局，测不出"能不能看见"，所以退一步查样式表**文本**：
+    // 保护的是"按钮被一条无条件 display:none 按死"这个具体错误。
+    const css = readFileSync(new URL("../chat/static/styles.css", import.meta.url), "utf-8");
+    // 注释要先剥掉：断言的是"没有这条规则"，而注释里正好会提到那个旧选择器。
+    const cssRules = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const rowActionBlock = cssRules.match(/\.row-action\s*\{([^}]*)\}/);
+    check("行内操作按钮不再自带 display:none（曾把删除入口按死）",
+          !!rowActionBlock && !/display:\s*none/.test(rowActionBlock[1]),
+          `实得 ${JSON.stringify(rowActionBlock?.[1]?.trim().slice(0, 60))}`);
+    check("没有指向已删菜单 .workspace-option 的显示规则",
+          !cssRules.includes(".workspace-option"));
+    check("每个工作区行都有删除按钮",
+          window.document.querySelectorAll('button[aria-label^="删除工作区"]').length === 2,
+          `实得 ${JSON.stringify([...window.document.querySelectorAll('button[aria-label^="删除工作区"]')].map((el) => el.getAttribute("aria-label")))}`);
   }
 
   // 点一下开关：没锁的话应该把新状态 PATCH 回这场对话；锁了就不该发生任何写回。

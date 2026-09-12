@@ -129,10 +129,18 @@
   color: var(--dsw-alias-label-primary);
 }
 
-/* 行内操作：上游 rows/Rows.module.css 的做法 —— 平时不占位，hover 才出现。 */
+/* 行内操作按钮（组头右侧那两个）。
+ *
+ * 这里踩过一个坑，写下来免得再犯：buttons 是**由容器**决定显隐的
+ * （.group-actions 默认 display:none，组头 hover 才 inline-flex），
+ * 所以按钮自己必须是 inline-flex 常态。原先照抄上游时把 display:none 抄到了
+ * 按钮上，只有 `.workspace-option:hover .row-action` 这一条负责显示 —— 而
+ * .workspace-option（旧的工作区下拉菜单）已经不在了。结果：容器被 hover 出来，
+ * 里面的按钮却永远 display:none，删除工作区的入口**连 hover 都看不见**。
+ * 抄上游要连"谁控制显隐"一起抄，只抄数值就会这样。 */
 .row-action {
   flex: none;
-  display: none;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 20px;
@@ -147,10 +155,6 @@
   font-size: 12px;
   line-height: 1;
   cursor: pointer;
-}
-
-.workspace-option:hover .row-action {
-  display: inline-flex;
 }
 
 .row-action:hover {
@@ -436,106 +440,13 @@
   display: none;
 }
 
-.group .session-item {
-  padding-left: 34px;        /* 缩进一级，一眼看出属于哪个工作区 */
-}
-
-.sidebar-error {
-  flex: none;
-  padding: 6px 8px;
-  font-size: 12px;
-  line-height: 16px;
-  color: var(--dsw-alias-state-business-primary);
-}
-
-/* 会话列表。左右负外边距抵消侧栏内边距，让滚动条贴到侧栏边缘（上游 regionArea 的做法）。 */
-/* 工作区分组（对齐上游 sidebar 的 groupBy=workspace）：一个组头 + 它下面的会话。
-   当前工作区的文件夹图标走 state-business-primary —— 上游 rows 的 folderActive
-   就是这个颜色，不额外发明标记。 */
-.group + .group {
-  margin-top: 4px;
-}
-
-.group-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 34px;
-  padding: 0 8px;
-  border-radius: 8px;
-  color: var(--dsw-alias-label-secondary);
-  cursor: pointer;
-  user-select: none;
-}
-
-.group-header:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-/* 整行是按钮（上游 projectRow：行本身是开关），图标只是它的第一个孩子。 */
-.group-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: inherit;
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.group-icon {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-.group-header.is-current .group-icon {
-  color: var(--dsw-alias-state-business-primary);
-}
-
-.group-actions {
-  flex: none;
-  display: none;
-  align-items: center;
-  gap: 4px;
-}
-
-.group-header:hover .group-actions {
-  display: inline-flex;
-}
-
-.group-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 13px;
-  line-height: 20px;
-}
-
-.group-header.is-current .group-name {
-  color: var(--dsw-alias-label-primary);
-}
-
-.group-count {
-  flex: none;
-  font-size: 12px;
-  line-height: 20px;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-/* 组头 hover 时才对调：数字让位给删除按钮（上游行内操作的做法）。 */
-.group-header:hover .group-count {
-  display: none;
+/* 没有 hover 的设备（手机/平板）上，hover 出来的动作等于不存在 —— 而这位聊天
+   服务在局域网上是会被手机访问的。所以触屏上让它们常驻，别把删除入口锁死在
+   :hover 里。 */
+@media (hover: none) {
+  .group-actions {
+    display: inline-flex;
+  }
 }
 
 .group .session-item {
