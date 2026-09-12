@@ -47,6 +47,9 @@ providers:
       - id: deepseek-v4-pro
         name: DeepSeek V4 Pro
         temperature: 0.2
+      - id: deepseek-flash
+        name: DeepSeek Flash
+        temperature: 0.2
 
   local_qwen:
     display_name: 本地 Qwen3.5-2B (vLLM)
