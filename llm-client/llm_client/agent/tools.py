@@ -74,8 +74,10 @@ RUN_BASH_SCHEMA = {
         "description": (
             "Run a bash command and return combined stdout/stderr. "
             "Use for listing files, searching (grep), git, or running programs. "
-            "Output is truncated to the last 20000 chars; a command killed by "
-            "timeout or a non-zero exit code is reported in the output."
+            "Long output is elided in the middle — the first 6000 and the last "
+            "14000 chars survive, with a marker saying how many were dropped, so "
+            "both the beginning and the exit code stay visible. A command killed "
+            "by timeout or a non-zero exit code is reported in the output."
         ),
         "parameters": {
             "type": "object",
@@ -169,6 +171,26 @@ def edit_file(path:str,old_text:str,new_text:str)->str:
         f.write(updated)
     return f"[edit_file] '{old_text}' replaced with '{new_text}' in {path}"
 
+OUTPUT_LIMIT = 20000
+OUTPUT_HEAD = 6000
+OUTPUT_TAIL = 14000
+
+
+def _elide_middle(text:str,limit:int=OUTPUT_LIMIT)->str:
+    """超长输出掐中间、留头尾。
+
+    留尾是关键：退出码、报错、堆栈都在末尾，只留头会丢掉最该看的信息。
+    """
+    if len(text) <= limit:
+        return text
+    omitted = len(text) - OUTPUT_HEAD - OUTPUT_TAIL
+    return (
+        text[:OUTPUT_HEAD]
+        + f"\n...[{omitted} chars omitted]...\n"
+        + text[-OUTPUT_TAIL:]
+    )
+
+
 def run_bash(command:str,timeout:int=60)->str:
     try:
         result = subprocess.run(
@@ -183,14 +205,8 @@ def run_bash(command:str,timeout:int=60)->str:
         )
     except subprocess.TimeoutExpired:
         return f"$ {command}\n[timed out after {timeout}s]"
-    output = ""
-    if result.stdout:
-        output += result.stdout
-    if result.stderr:
-        output += result.stderr
-    output = f"$ {command}\n{output}"
-    output += f"[exit code: {result.returncode}]"
-    return output
+    output = _elide_middle((result.stdout or "") + (result.stderr or ""))
+    return f"$ {command}\n{output}[exit code: {result.returncode}]"
 
 def write_file(path:str,content:str)->str:
     p = Path(path)
