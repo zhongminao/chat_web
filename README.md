@@ -1,134 +1,129 @@
-# AI 聊天助手（chat）
+# chat
 
 React + FastAPI 的聊天服务，后端带一个能真的动手的 agent（读写文件、跑 bash）。
 模型走 OpenAI 兼容接口（gpt / qwen / deepseek / local_qwen）。
 
-## 目录
-
 ```
-tools/chat/                 # 仓库根（git 就在这一层）
-├── README.md                  # 本文件
-├── .gitignore
-├── packages/                  # 一个个可独立安装/构建的项目，各自带自己的清单
-│   ├── chat/                  # 唯一的 Python 包（src 布局）
+tools/chat/                      # 仓库根（git 在这一层）
+├── packages/
+│   ├── chat/                    # 唯一的 Python 包（src 布局）
 │   │   ├── pyproject.toml
-│   │   ├── demo_agent_loop.py # agent 循环的可跑示例（假 client，不花钱）
+│   │   ├── demo_agent_loop.py   # agent 循环的可跑示例（假 client，不花钱）
 │   │   └── src/chat/
-│   │       ├── __main__.py    # 启动入口（python -m chat）
-│   │       ├── app.py         # 后端：会话/工作区/工具开关
-│   │       ├── openai_client.py   # Client（无状态单次对话）
-│   │       ├── providers.yaml     # 供应商目录
-│   │       ├── agent/             # agent 循环 + 四个工具 + 会话日志（路线图见该包 README）
-│   │       └── static/        # 前端**产物**与样式（app.js / index.html / styles.css / theme/）
-│   └── frontend/              # Node 包：前端源码，esbuild 打包
-│       ├── package.json
-│       ├── smoke.mjs          # UI 冒烟测试（jsdom 里真跑一遍产物）
-│       └── src/main.jsx
-├── evals/                     # 评估：量 agent 循环的通过率（见 evals/agent/README.md）
-│   └── agent/
-├── storage/                   # 运行时数据（**不进 git**）：
-│   ├── sessions/<id>.jsonl    #   会话日志：一场对话一个 append-only 文件
-│   └── workspaces.json        #   工作区登记表
-├── workplace/                 # 一个工作区目录（agent 干活的地方，可自行增删）
-└── start_local_qwen.sh        # 本地 Qwen3.5-2B vLLM 服务
+│   │       ├── app.py           # FastAPI：会话 / 工作区 / 工具开关
+│   │       ├── __main__.py      # 入口：python -m chat
+│   │       ├── openai_client.py # Client（无状态单次对话）
+│   │       ├── providers.yaml   # 供应商目录
+│   │       ├── agent/           # 工具循环 + 四个工具 + 会话日志 + 工作区登记
+│   │       └── static/          # 前端**产物**与样式（app.js / index.html / styles.css / theme/）
+│   └── frontend/                # Node 包：前端源码，esbuild 打包（package.json / smoke.mjs / src/）
+├── storage/                     # 运行时数据（**不进 git**）：sessions/*.jsonl + workspaces.json
+├── workplace/                   # 一个工作区目录（agent 干活的地方，可增删）
+└── start_local_qwen.sh          # 本地 Qwen3.5-2B vLLM
 ```
+
+## 安装与启动
+
+```bash
+pip install -e ~/mydisk/tools/chat/packages/chat   # 唯一的 Python 包
+python -m chat                                     # 默认 8200，任意目录下都能起
+systemctl --user restart chat                      # 常驻服务；日志 journalctl --user -u chat -f
+```
+
+局域网访问 `http://10.23.14.209:8200`。**移动或改名仓库之后必须重装上面那个包** ——
+editable 记的是绝对路径，路径一换就 `No module named chat`（踩过）；`~/mydisk/web/chat`
+那个软链接同理，它不跟着 git 走。
 
 ## 前端构建
 
 ```bash
 cd packages/frontend && pnpm install   # 首次
-pnpm run build                   # 产出 packages/chat/chat/static/app.js（约 170KB）
-pnpm run watch                   # 开发时挂着，改完自动重建
-pnpm run smoke                   # 只跑 UI 冒烟测试
+pnpm run build      # 产出 packages/chat/src/chat/static/app.js
+pnpm run watch      # 改完自动重建
+pnpm run check      # build + smoke（jsdom 里真跑一遍产物）
 ```
 
-**产物是提交进仓库的**，所以不改前端的人 clone 下来直接能跑，机器上不需要 Node。
-Node 只在构建时需要；服务运行时只跑 Python。
+产物**提交进仓库**，所以不碰前端的人 clone 下来直接能跑，机器上不需要 Node。
 
-**一个 Python 包 + 一个 Node 包。** Python 那边只有 `chat` —— LLM 客户端、agent 运行时、
-FastAPI 应用都在里面（原先拆成 `chat` 和 `chat-agent` 两个发行包，但那个边界从没被用过：
-消费者只有本应用一个，而它作为依赖根本解析不了）。`frontend` 是另一套工具链（Node），
-只负责产出 `chat` 包里的 `static/app.js`。产物**提交进仓库**，所以不碰前端的人 clone
-下来直接能跑，机器上不需要 Node。
+## 配置与密钥
 
-Python 包用 **`src/` 布局**：包目录不挨着仓库里其他目录，"同名的普通目录被当成命名空间
-包、把真包遮蔽掉"这类事故就物理上不可能（这个坑踩过两次：`llm_client` 那次服务启动即
-`ImportError`；`chat-agent` 那次靠目录名带连字符躲过去 —— 现在不需要这种技巧了）。
+真实密钥不进仓库，也不放 `*.example` 模板（空模板只是把下表抄第二遍）。
 
-## 启动
+| 变量 | 真实文件 | 谁在读 |
+|---|---|---|
+| `GPT_API_KEY` / `DEEPSEEK_API_KEY` / `QWEN_API_KEY` / `LOCAL_QWEN_API_KEY` | `~/.bashrc` | `src/chat/app.py` |
+| `LOCAL_QWEN_BASE_URL` / `_MODEL_NAME` / `_MODEL_DIR` | shell 环境变量 | `src/chat/providers.yaml`；`start_local_qwen.sh` |
+| `CHAT_STORAGE` / `CHAT_WORKSPACE` | `chat.service` 的 `Environment=` | `src/chat/app.py`：运行时数据位置 / 默认工作区根 |
 
-```bash
-pip install -e ~/mydisk/tools/chat/packages/chat   # 唯一的 Python 包，装一次
-python -m chat [port]                              # 任意目录下启动，默认端口 8200
-```
+- `GPT_API_KEY` 是**文本解析 `~/.bashrc`** 拿的，不是读环境变量：服务由 systemd 启动，
+  **继承不到你终端的 shell 环境**（环境变量只在自己那棵进程树里往下传）
+- `CHAT_STORAGE` / `CHAT_WORKSPACE` 是**路径**不是密钥，所以直接写在 unit 里。它们的默认值
+  "跟着代码走"，代码一挪数据目录就跟着挪、表现成历史对话凭空消失 —— 所以显式钉死
+- `~/.config/chat/chat.env` 是 unit 的可选 `EnvironmentFile`，**当前不存在**（unit 用 `-` 前缀，
+  缺失不影响启动）。要加变量再创建它，不必改 unit
 
-打开：
-
-```text
-http://10.23.14.209:8200
-```
-
-tmux 里后台常驻：
-
-```bash
-tmux new-session -d -s chat 'python -m chat 8200'
-```
+本地 Qwen：`bash start_local_qwen.sh [port]`（默认 8001）后
+`export LOCAL_QWEN_BASE_URL=http://127.0.0.1:8001/v1`。模型目录默认
+`/home/zhong/mydisk/IM_Opt/LLM/qwen3p5_2b`，用 `LOCAL_QWEN_MODEL_DIR` 覆盖。
 
 ## 运行说明
 
-- 对话记录在**服务端**：一场对话一个 append-only JSONL（`storage/sessions/<id>.jsonl`），
-  历史用重放得到。刷新页面、换浏览器都不会丢；清掉文件就是永久删除那场对话
-- 工作区决定 agent 在哪个目录里干活（相对路径的基准、`run_bash` 的 cwd）
-- 默认模型 `gpt-5.5`（供应商目录是包内的 `src/chat/providers.yaml`）
-- `app.py` 优先从当前 shell 读取 `GPT_API_KEY`，没有则尝试从 `~/.bashrc` 读取
-- 其他供应商 key：`QWEN_API_KEY` / `DEEPSEEK_API_KEY` / `LOCAL_QWEN_API_KEY`
+- 对话记录在**服务端**：一场一个 append-only JSONL，历史靠重放。刷新、换浏览器都不丢；
+  删掉文件就是永久删除那场对话（没有数据库，也没有回收站）
+- **工作区决定 agent 在哪干活**：相对路径按它解析、`run_bash` 的 `cwd` 是它
+- 默认模型 `gpt-5.5`
+- **`run_bash` 没有沙箱**：绝对路径照样能到任何地方。这是路线图第 5 步
 
-## 本地 Qwen（local_qwen provider）
+## 安全边界
 
-```bash
-bash start_local_qwen.sh [port]       # 默认 8001
-export LOCAL_QWEN_BASE_URL=http://127.0.0.1:8001/v1
+**当前不对外**：`cpolar.yml` 里的 `chat8200` 隧道已删，cpolar 本身也是 disabled ——
+只在局域网可达，因此**没有密码**。要对外就往下加回一个隧道块（服务用
+`cpolar start-all -config=...`，加块即生效，不必改 unit）：
+
+```yaml
+  chat8200:
+    proto: http
+    addr: "8200"
+    region: cn_vip
+    redirect_https: true
+    auth: "用户名:密码"     # cpolar 边缘的 Basic Auth（键名就是 auth，不是 http_auth）
 ```
 
-模型目录默认 `/home/zhong/mydisk/IM_Opt/LLM/qwen3p5_2b`，可用环境变量覆盖：
-`export LOCAL_QWEN_MODEL_DIR=/path/to/model`
+密码放边缘而不是放在应用里：**只有边缘那层能区分"公网 / 局域网"** —— cpolar 客户端连的是
+localhost，在应用眼里和局域网设备完全一样。
 
-## 端口占用
+## agent 路线图（按序勿跳步）
 
-```bash
-ss -ltnp '( sport = :8200 )'
-```
+1. ~~轨迹落盘~~ 已完成
+2. **eval 基线** —— 真实任务 + 通过率，作为后续所有改动的裁判
+3. `read_file` 输出总量预算 —— 最坏输出＝行上限 × 单行上限，量级万级 token 且无总量上界
+4. 步边界进度反馈 —— 只推进度不推 token；也是第 5 步审批的通道前提
+5. 沙箱 + 危险命令审批 —— `run_bash` 不能无门
+6. 工具注册表单一来源 —— schema 在 `tools.py`、散文在 `app.py`，加一个工具要改两处
+7. 上下文压缩 —— 降级为待证明：瓶颈可能是单次读太胖，不是历史太长
+8. planning + 可见 UI
+9. search —— 走 API，不用本地 2B
 
-## 说明
+### 第 2 步怎么做（代码将放在 `evals/agent/`）
 
-- `~/mydisk/web/chat` 是软链接，指向本目录（旧路径的兼容入口）。**移动/改名仓库时要
-  记得一起改** —— 它不跟着 git 走，改名那次就断过一次
-- git 历史已随迁移保留（`.git` 在仓库根，跟着目录一起走）
-- 代码原先是两个发行包（`chat` + `chat-agent`），2026-09-12 合并成一个 `chat`：那个边界
-  从没被用过，而且 `chat` 声明依赖 `chat-agent` 时它根本解析不了（那个名字不在任何索引
-  上），只有本机两个 editable 包都装了才凑得出来
-- 更早的名字：`chat_agent` 前身叫 `llm_client`，原先在 `tools/llm_client`（**无 git**）
-- agent 能力演进路线图见 `packages/chat/README.md`
-- 密钥与运行时配置**不进仓库**：真实文件在 `~/.bashrc`、`~/.config/chat/` 与
-  `/usr/local/etc/cpolar/cpolar.yml`，仓库里连 `*.example` 模板都不放。变量 → 文件 →
-  谁在读 的映射表见 `packages/chat/README.md` 的「配置与密钥」
-- **chat 当前不对外**：`cpolar.yml` 里的 `chat8200` 隧道已删（2026-09-12），cpolar 本身也是
-  disabled。只在局域网可达，因此**没有密码** —— 安全性建立在"只有局域网连得上"。
-  要对外就**往 `/usr/local/etc/cpolar/cpolar.yml` 的 `tunnels:` 下加回一个块**，密码写在
-  那个块的 `auth` 上（服务用 `start-all -config=...`，加块即生效，不必改 unit）：
+判据是**世界变成什么样**，不是回复像不像。一个 case = fixture + 任务 + **机器可判的判定**
+（JSON 能 `load`、脚本输出对、文件 hash 没变、case 目录之外没有新文件）。
 
-  ```yaml
-    chat8200:
-      proto: http
-      addr: "8200"
-      region: cn_vip
-      redirect_https: true
-      auth: "用户名:密码"     # cpolar 边缘的 Basic Auth（键名就是 auth，不是 http_auth）
-  ```
+- 第 1 层（不花钱）：脚本化 client（`demo_agent_loop.py` 里那个 `FakeClient` 就是种子），
+  断言 loop 机制与工具语义 —— 该停就停、报错后能继续、`tool_call_id` 配对、elision 头尾、
+  spill 落盘与取回、守卫三条路径
+- 第 2 层（真模型）：每 case 重复 N 次，报 pass@1 / pass^N + 轮数 + 耗时 + token
+- 结果落 append-only JSONL，带模型名 / 温度 / 日期 / `git rev-parse` —— 这样两次跑能 diff 出
+  "这次改动让哪个 case 变坏了"
+- **不需要服务端、前端、storage**：只 import 包，`make_executor(临时目录)` 一 case 一目录
 
-  密码放边缘而不是放应用里，是因为**只有边缘那层能区分"公网 / 局域网"**：cpolar 客户端连的是
-  localhost，在应用眼里和局域网设备完全一样
-- **`run_bash` 没有沙箱**：工具只是在工作区根里干活（相对路径/`cwd`），绝对路径照样
-  能到任何地方。这是路线图第 5 步（见 `packages/chat/README.md`）
-- 运行时数据位置可以用 `CHAT_STORAGE` 钉死（systemd unit 里已显式给成 `<仓库>/storage`）：
-  默认值是"跟着代码走"的，代码一挪数据目录就跟着挪，表现成历史对话凭空消失
+> 缺口：**token 从来没被记录**（provider 返回的 `usage` 一次都没读），要报成本得先补。
+> 另外只有 5~10 个 case 时，数字是回归信号，不是"我的 agent 有 87 分"，别当排行榜用。
+
+## 沿革
+
+- 代码原是两个发行包（`chat` + `chat-agent`），2026-09-12 合并成一个 `chat`：那个边界
+  从没被用过，而且 `chat` 声明依赖 `chat-agent` 时根本解析不了（那名字不在任何索引上）
+- 更早：`chat_agent` 前身叫 `llm_client`，在 `tools/llm_client`（无 git）
+- 用 `src/` 布局是为了**根除遮蔽事故**：包目录不挨着仓库里其他目录，"同名的普通目录被
+  当成命名空间包、把真包盖掉"就不可能发生（踩过两次，其中一次服务启动即 `ImportError`）
