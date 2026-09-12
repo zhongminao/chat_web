@@ -24,16 +24,43 @@ python -m chat                 # http://127.0.0.1:8200
 systemctl --user restart chat  # 以服务常驻时；日志见 journalctl --user -u chat -f
 ```
 
-- 运行时数据位置由 `CHAT_STORAGE` 决定（unit 里显式给成 `<仓库>/storage`）：会话日志与
-  工作区登记表都在那儿。默认值是"跟着代码走"的，代码一挪数据目录就跟着挪，表现成
-  历史对话凭空消失 —— 所以显式钉死
-- 运行时配置：`~/.config/chat/chat.env`（`chat.service` 的 `EnvironmentFile`，当前无变量）
+## 配置与密钥
+
+**真实密钥不进仓库**，也不放 `*.example` 模板（空模板只是把下面这张表抄第二遍）。
+值都在仓库外：
+
+| 变量 | 真实文件 | 谁在读 |
+|---|---|---|
+| `GPT_API_KEY` / `DEEPSEEK_API_KEY` / `LOCAL_QWEN_API_KEY` | `~/.bashrc` | `src/chat/app.py` 的 `load_env_value_from_bashrc()` |
+| `LOCAL_QWEN_BASE_URL` / `_MODEL_NAME` / `_MODEL_DIR` | shell 环境变量（`export` 后再起进程） | `src/chat/providers.yaml` 的 `base_url_env` / `model_name_env`；`start_local_qwen.sh` |
+| `CHAT_STORAGE` / `CHAT_WORKSPACE` | `chat.service` 的 `Environment=` | `src/chat/app.py` —— 运行时数据位置 / 默认工作区根 |
+
+`GPT_API_KEY` 为什么要**去文本解析 `~/.bashrc`**、而不是直接读环境变量：服务是 systemd
+起的，**继承不到你终端的 shell 环境**（环境变量只在自己那棵进程树里往下传）。这是绕路，
+但绕得有必要。
+
+`CHAT_STORAGE` / `CHAT_WORKSPACE` 不是密钥而是**路径**，所以直接写在 systemd unit 里，
+不塞进 EnvironmentFile：改了能立刻看出问题，没必要藏起来。两者的默认值都是"跟着代码走"
+的（chat 包的同级目录 / 进程 cwd），代码一挪就跟着挪 —— 所以 unit 里显式钉死成
+`<仓库>/storage` 与 `<仓库>/workplace`，免得历史对话凭空"消失"。
+
+`~/.config/chat/chat.env` 是 chat.service 的可选 EnvironmentFile，**当前不存在**：unit 用
+`-` 前缀，文件缺失不影响启动。要加变量再创建它，不必改 unit。
+
+## 运行时数据
+
+会话日志与工作区登记表都在 `CHAT_STORAGE` 指的目录（unit 给的是 `<仓库>/storage`）：
+`sessions/<id>.jsonl` 一场对话一个文件，`workspaces.json` 是工作区登记表。删掉文件就是
+永久删除那场对话 —— 没有数据库，也没有回收站。
+
+## 其他注意
+
 - 模型目录：`src/chat/providers.yaml`，改完**不用重启**（每次请求重读）
 - `static/theme/` 是 DSH 上游 token 的逐字拷贝（MIT，许可见其中的 `LICENSE`，别删）。
   **别手改** —— 配色改 `styles.css`，或在自己的表里覆盖同名变量
 - 鉴权不在本进程：chat 当前只在局域网可达、**没有密码**（公网隧道已删）。应用层区分
   不出来源，所以这件事不在这里做 —— 要对外时往 `cpolar.yml` 的 `tunnels:` 加回一个块，
-  密码写在那层的 `auth` 上（详见仓库根 `config/README.md`）
+  密码写在那层的 `auth` 上（做法与理由见仓库根 `README.md`）
 - **`run_bash` 没有沙箱**：工具只是在工作区根里干活（相对路径按它解析、bash 的 cwd
   是它），绝对路径照样能到任何地方。这是路线图的第 5 步
 
@@ -62,12 +89,6 @@ systemctl --user restart chat  # 以服务常驻时；日志见 journalctl --use
 | 换 conda 环境 / 新机器 | **需要**在该环境重新安装 | 需要重装 |
 
 一句话：**editable 模式下改代码不用重装，只有改包元数据或目录搬家才需要。**
-
-## 卸载
-
-```bash
-pip uninstall chat
-```
 
 ## 卸载
 

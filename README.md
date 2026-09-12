@@ -26,7 +26,6 @@ tools/chat/                 # 仓库根（git 就在这一层）
 │       └── src/main.jsx
 ├── evals/                     # 评估：量 agent 循环的通过率（见 evals/agent/README.md）
 │   └── agent/
-├── config/                    # 密钥/运行时配置的说明（真文件不进仓库）
 ├── storage/                   # 运行时数据（**不进 git**）：
 │   ├── sessions/<id>.jsonl    #   会话日志：一场对话一个 append-only 文件
 │   └── workspaces.json        #   工作区登记表
@@ -110,13 +109,25 @@ ss -ltnp '( sport = :8200 )'
   上），只有本机两个 editable 包都装了才凑得出来
 - 更早的名字：`chat_agent` 前身叫 `llm_client`，原先在 `tools/llm_client`（**无 git**）
 - agent 能力演进路线图见 `packages/chat/README.md`
-- 密钥与运行时配置**不进仓库**：真实文件在 `~/.config/{chat,fortrix}/` 与
-  `/usr/local/etc/cpolar/cpolar.yml`，仓库里连模板都不放。变量 → 文件的映射表见
-  `config/README.md`
+- 密钥与运行时配置**不进仓库**：真实文件在 `~/.bashrc`、`~/.config/chat/` 与
+  `/usr/local/etc/cpolar/cpolar.yml`，仓库里连 `*.example` 模板都不放。变量 → 文件 →
+  谁在读 的映射表见 `packages/chat/README.md` 的「配置与密钥」
 - **chat 当前不对外**：`cpolar.yml` 里的 `chat8200` 隧道已删（2026-09-12），cpolar 本身也是
   disabled。只在局域网可达，因此**没有密码** —— 安全性建立在"只有局域网连得上"。
-  要对外时**往 `cpolar.yml` 的 `tunnels:` 下加回一个块**（服务用的是 `start-all`，
-  加了块就生效，不需要动 ExecStart —— 早先这里写成"加回 ExecStart"，那是指错了文件）
+  要对外就**往 `/usr/local/etc/cpolar/cpolar.yml` 的 `tunnels:` 下加回一个块**，密码写在
+  那个块的 `auth` 上（服务用 `start-all -config=...`，加块即生效，不必改 unit）：
+
+  ```yaml
+    chat8200:
+      proto: http
+      addr: "8200"
+      region: cn_vip
+      redirect_https: true
+      auth: "用户名:密码"     # cpolar 边缘的 Basic Auth（键名就是 auth，不是 http_auth）
+  ```
+
+  密码放边缘而不是放应用里，是因为**只有边缘那层能区分"公网 / 局域网"**：cpolar 客户端连的是
+  localhost，在应用眼里和局域网设备完全一样
 - **`run_bash` 没有沙箱**：工具只是在工作区根里干活（相对路径/`cwd`），绝对路径照样
   能到任何地方。这是路线图第 5 步（见 `packages/chat/README.md`）
 - 运行时数据位置可以用 `CHAT_STORAGE` 钉死（systemd unit 里已显式给成 `<仓库>/storage`）：
