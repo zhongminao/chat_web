@@ -22,8 +22,13 @@ import os
 from pathlib import Path
 
 
-# 规范路径 -> (mtime_ns, size)
-_observed: dict[str, tuple[int, int]] = {}
+# 规范路径 -> ((mtime_ns, size), 行数)
+#
+# 行数在"记录时"是白给的 —— 三个工具手里本来就有内容（read_file 刚读过、
+# write_file 刚写了、edit_file 刚改完），数一下不用额外 I/O。
+# 行数刻意用 splitlines() 数，与 read_file 报的"N lines total"同一定义，
+# 否则两个数字对不上，反而误导模型。
+_observed: dict[str, tuple[tuple[int, int], int]] = {}
 
 # 规范路径 -> 已经提醒过的那一版。每个"新版本"只拦一次：
 # 提醒完之后模型要重读还是硬改，是它自己的判断 —— 守卫的职责是"告知"，
@@ -43,21 +48,46 @@ def version(path: str) -> tuple[int, int] | None:
     return (info.st_mtime_ns, info.st_size)
 
 
-def remember(path: str) -> None:
-    """记下"已观测到该文件在此版本"。文件不存在则清除记录。"""
+def _count_lines(path: str) -> int | None:
+    """只在检测到变化时才调用 —— 字节数在 stat 里是常数时间，行数不是：
+    要读全文，成本随体积线性增长（实测 50 MB 约 80 ms，而 stat 是 0.002 ms）。"""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            return len(handle.read().splitlines())
+    except OSError:
+        return None
+
+
+def remember(path: str, lines: int | None = None) -> None:
+    """记下"已观测到该文件在此版本"。
+
+    lines: 调用方已知的行数（它手里有内容，白给）。给了就不用再读一次。
+    """
     key = _key(path)
     current = version(path)
     if current is None:
         _observed.pop(key, None)
     else:
-        _observed[key] = current
+        if lines is None:
+            lines = _count_lines(path) or 0
+        _observed[key] = (current, lines)
     _warned.pop(key, None)
 
 
-def _changed_detail(before: tuple[int, int], after: tuple[int, int]) -> str:
+def _changed_detail(
+    before: tuple[int, int],
+    before_lines: int,
+    after: tuple[int, int],
+    after_lines: int | None,
+    ) -> str:
+    parts: list[str] = []
     if before[1] != after[1]:
-        return f"size {before[1]} → {after[1]} bytes"
-    return "same size, content changed"
+        parts.append(f"{before[1]} → {after[1]} bytes")
+    if after_lines is not None and before_lines != after_lines:
+        parts.append(f"{before_lines} → {after_lines} lines")
+    if not parts:
+        return "same size and line count, content changed"
+    return ", ".join(parts)
 
 
 def guard(path: str) -> str | None:
@@ -68,9 +98,10 @@ def guard(path: str) -> str | None:
         return None
 
     key = _key(path)
-    seen = _observed.get(key)
-    if seen is None:
+    entry = _observed.get(key)
+    if entry is None:
         return "not read yet — read it first, then retry"
+    seen, seen_lines = entry
     if seen == current:
         return None
     if _warned.get(key) == current:
@@ -78,8 +109,9 @@ def guard(path: str) -> str | None:
         return None
 
     _warned[key] = current
+    detail = _changed_detail(seen, seen_lines, current, _count_lines(path))
     return (
-        f"changed since you read it ({_changed_detail(seen, current)}) — "
+        f"changed since you read it ({detail}) — "
         f"re-read the part you are about to change, then retry"
     )
 

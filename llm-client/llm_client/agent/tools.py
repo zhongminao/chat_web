@@ -192,7 +192,7 @@ def read_file(path:str,offset=1,limit=500)->str:
     chunk = lines[start:start+limit]
     end = start + len(chunk)
     body = "\n".join(_elide_line(line) for line in chunk)
-    remember_observed(path)
+    remember_observed(path, lines=total)
     result = f"[read_file] {path} ({total} lines total, showing lines {start + 1}-{end})\n{body}"
     if end < total:
         result += f"\n...[{total - end} more lines in file. Use offset={end + 1} to continue.]"
@@ -217,7 +217,7 @@ def edit_file(path:str,old_text:str,new_text:str)->str:
     updated = content.replace(old_text,new_text,1)
     with open(path,"w",encoding="utf-8") as f:
         f.write(updated)
-    remember_observed(path)
+    remember_observed(path, lines=len(updated.splitlines()))
     return f"[edit_file] '{old_text}' replaced with '{new_text}' in {path}"
 
 def _elide_middle(text:str,limit:int=BASH_OUTPUT_LIMIT)->str:
@@ -278,7 +278,7 @@ def write_file(path:str,content:str)->str:
             f.write(content)
     except OSError as exc:
         raise ValueError(f"write {p} failed: {exc}")
-    remember_observed(path)
+    remember_observed(path, lines=len(content.splitlines()))
     return f"[write_file] {p} written"
 
 # ---------------------------------------------------------------------------
