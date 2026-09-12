@@ -34,7 +34,10 @@ from typing import Any
 
 
 VERSION = 1
-DEFAULT_DIR = Path.home() / ".local" / "state" / "chat-agent" / "sessions"
+# 不给 base_dir 时的兜底位置。服务端**总是**显式传 SESSION_DIR，这只是给"单独用这个
+# 模块"的场景留的默认值。路径里的 chat-agent 是合并前的旧包名，一并改掉：那个目录
+# 从没被创建过（本机 ~/.local/state/ 下就没有它），所以改默认值不会丢东西。
+DEFAULT_DIR = Path.home() / ".local" / "state" / "chat" / "sessions"
 
 # 会话 id 来自客户端，会被当文件名用。**必须**限制成单个安全路径段 ——
 # 否则 "../../etc/foo" 就是一次路径穿越（服务在局域网可达，不是只有本机能连）。
@@ -108,7 +111,7 @@ def load_items(base_dir: Path | str, session_id: str) -> list[dict[str, Any]]:
     位置 —— 工具步骤本来夹在"用户提问"和"最终回复"之间，两张平铺表拼不回原顺序。
     这里直接给渲染序，前端照着 map 一遍就行。
     """
-    from chat_agent.agent.tools import TOOL_ERROR_PREFIX
+    from chat.agent.tools import TOOL_ERROR_PREFIX
 
     items: list[dict[str, Any]] = []
     pending: dict[str, dict[str, str]] = {}

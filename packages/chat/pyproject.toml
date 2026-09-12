@@ -5,17 +5,29 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "chat"
 version = "0.1.0"
-description = "AI 聊天助手：React + FastAPI，后端通过 chat-agent 调用 LLM"
+description = "LLM 聊天服务：FastAPI + agent 工具循环（一个包）"
 requires-python = ">=3.10"
 dependencies = [
+    # web 层
     "fastapi",
     "uvicorn",
     "pydantic",
-    "chat-agent",
+    # LLM 客户端与 agent 运行时。这两块原先是一个独立的包（chat-agent），现已合并 ——
+    # 那个边界从没被用过：消费者只有本应用一个，而且作为依赖它根本解析不了
+    # （"chat-agent" 不在任何索引上），只有本机两个 editable 包都装了才凑得出来。
+    "openai>=1.0",
+    "pyyaml",
 ]
 
-[tool.setuptools]
-packages = ["chat"]
+# src/ 布局（包在 src/chat/）。除了是通行做法，这里还有个具体理由：包目录不挨着
+# 仓库里的其他目录，就不会出现"同名的普通目录被当成命名空间包、把真包遮蔽掉"。
+# 那类事故踩过两次，都很难查 —— llm_client 那次服务起不来；chat-agent 那次靠
+# 目录名带连字符躲过去。现在这个结构让它在物理上不可能。
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["chat*"]
 
 [tool.setuptools.package-data]
-chat = ["static/*"]
+# providers.yaml 随包分发（openai_client 按 __file__ 相对加载）；
+# static/ 是前端**产物**，提交在仓库里，所以不碰前端的人 clone 下来直接能跑。
+chat = ["providers.yaml", "static/*", "static/theme/*"]

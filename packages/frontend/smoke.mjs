@@ -18,7 +18,7 @@
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
 
-const STATIC_DIR = new URL("../chat/chat/static/", import.meta.url);
+const STATIC_DIR = new URL("../chat/src/chat/static/", import.meta.url);
 const html = readFileSync(new URL("index.html", STATIC_DIR), "utf-8");
 const bundle = readFileSync(new URL("app.js", STATIC_DIR), "utf-8");
 
@@ -319,7 +319,7 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
     //
     // jsdom 不算外部样式表的布局，测不出"能不能看见"，所以退一步查样式表**文本**：
     // 保护的是"按钮被一条无条件 display:none 按死"这个具体错误。
-    const css = readFileSync(new URL("../chat/chat/static/styles.css", import.meta.url), "utf-8");
+    const css = readFileSync(new URL("../chat/src/chat/static/styles.css", import.meta.url), "utf-8");
     // 注释要先剥掉：断言的是"没有这条规则"，而注释里正好会提到那个旧选择器。
     const cssRules = css.replace(/\/\*[\s\S]*?\*\//g, "");
     const rowActionBlock = cssRules.match(/\.row-action\s*\{([^}]*)\}/);

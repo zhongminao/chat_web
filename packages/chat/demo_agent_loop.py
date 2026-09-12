@@ -14,14 +14,14 @@ import json
 import shutil
 from pathlib import Path
 
-from chat_agent.agent import TOOL_SCHEMAS, make_executor, run_agent_turn
+from chat.agent import TOOL_SCHEMAS, make_executor, run_agent_turn
 
 DEMO_DIR = Path("/tmp/agent_demo")      # 演示用的"工作区根"
 DEMO_FILE = DEMO_DIR / "hello.txt"
 
 
 class FakeClient:
-    """模拟 chat_agent.Client：按脚本依次返回 assistant_message。
+    """模拟 chat.Client：按脚本依次返回 assistant_message。
 
     真实 client 的 request_assistant_message 长一样：
     传入 (messages, tools)，返回 (assistant_message, metadata)。

@@ -8,9 +8,9 @@
     workspace_store 工作区登记表：agent 被允许活动的目录（将来沙箱的边界）
 """
 
-from chat_agent.agent import session_store, workspace_store
-from chat_agent.agent.loop import run_agent_turn
-from chat_agent.agent.tools import TOOL_SCHEMAS, execute_tool, make_executor
+from chat.agent import session_store, workspace_store
+from chat.agent.loop import run_agent_turn
+from chat.agent.tools import TOOL_SCHEMAS, execute_tool, make_executor
 
 __all__ = [
     "run_agent_turn",

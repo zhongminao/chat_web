@@ -3,9 +3,9 @@ import json
 import subprocess
 from pathlib import Path
 
-from chat_agent.agent.observed import guard as guard_mutation
-from chat_agent.agent.observed import remember as remember_observed
-from chat_agent.agent.spill import save as save_spill
+from chat.agent.observed import guard as guard_mutation
+from chat.agent.observed import remember as remember_observed
+from chat.agent.spill import save as save_spill
 
 # 工具输出的内联上限。bash 按整体掐（超长另存 spill 文件）；read_file 按行分页，
 # 单行过长则原地截断。

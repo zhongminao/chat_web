@@ -3,7 +3,7 @@
 单次对话执行者：provider 解析 / api_key / 调用 OpenAI 兼容接口 / 解析。
 
 **会话历史不在这里。** 这里曾经有一个 ConversationSession（服务端历史容器），
-2026-09-12 删除 —— 改为把历史交给会话日志（chat_agent.agent.session_store），
+2026-09-12 删除 —— 改为把历史交给会话日志（chat.agent.session_store），
 日志即权威、历史由重放得到，不再需要另存一份内存里的会话对象。
 
 合并自 IM_Opt 的 LLM/util/openai_client.py + graph/util/dialogue/conversation_session.py：

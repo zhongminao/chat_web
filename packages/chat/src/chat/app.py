@@ -19,7 +19,7 @@ STATIC_DIR = BASE_DIR / "static"
 # 老地方），而且不报错。所以改成可以用 CHAT_STORAGE 钉死，默认值只当兜底：
 #   CHAT_STORAGE=<仓库>/storage  → 数据位置与代码位置解耦
 # 服务端在 systemd unit 里显式给了这个变量。
-# 位置由这里决定而不是 chat_agent：那个包是独立可安装的，不该知道仓库布局。
+# 位置由这里显式给出：不依赖仓库布局，代码怎么搬都不影响数据。
 _env_storage = os.environ.get("CHAT_STORAGE")
 STORAGE_DIR = (
     Path(_env_storage).expanduser().resolve() if _env_storage else BASE_DIR.parent / "storage"
@@ -48,7 +48,7 @@ DEFAULT_SYSTEM_PROMPT = (
 
 # 工具模式的系统提示词：告诉模型它可以调用工具、何时用哪个、有哪些行为规则。
 # 注意：不贴 JSON schema——工具定义走 API 的 tools 参数，这里只给可读的规则，
-# 避免与 chat_agent/agent/tools.py 里的实现重复维护而漂移。
+# 避免与 chat/agent/tools.py 里的实现重复维护而漂移。
 TOOL_SYSTEM_PROMPT = (
     "You are an agent that can take real actions through tools. "
     "Tools available: "
@@ -67,8 +67,8 @@ TOOL_SYSTEM_PROMPT = (
     "edited, or ran."
 )
 
-from chat_agent import create_client, get_model_temperature, list_providers
-from chat_agent.agent import (
+from chat import create_client, get_model_temperature, list_providers
+from chat.agent import (
     make_executor,
     run_agent_turn,
     session_store,

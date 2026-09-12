@@ -2,7 +2,7 @@
 
 量的是**agent 循环本身**，不是聊天回答好不好。判据是"世界变成什么样了"，不是"回复像不像"。
 
-这是路线图第 2 步（见 `packages/chat-agent/README.md`）。它排在这里的原因：之后的每一步
+这是路线图第 2 步（见 `packages/chat/README.md`）。它排在这里的原因：之后的每一步
 （read_file 总量预算、进度反馈、沙箱、工具注册表、上下文压缩、planning）都要用它的
 数字证明"没变坏"。
 
@@ -25,7 +25,7 @@
 
 ## 两层，别混
 
-**第 1 层：确定性、不花钱。** 脚本化 client（`packages/chat-agent/demo_agent_loop.py` 里
+**第 1 层：确定性、不花钱。** 脚本化 client（`packages/chat/demo_agent_loop.py` 里
 的 `FakeClient` 就是种子）跑同一套 fixture。断言的是 loop 机制与工具语义：该停就停、
 不撞 `max_rounds`、工具报错后能继续、`tool_call_id` 配对、协议消息形状、elision 头尾、
 spill 落盘与取回、exit code、超时、非 UTF-8、路径带空格、守卫的三条路径、日志回放往返。
@@ -48,10 +48,10 @@ spill 落盘与取回、exit code、超时、非 UTF-8、路径带空格、守�
 
 ## 不需要的东西
 
-**服务端、前端、storage 都不需要。** 只需要 `chat_agent` 这个库：
+**服务端、前端、storage 都不需要。** 只需要 `chat` 这个包（的 agent 部分）：
 
 ```python
-from chat_agent.agent import TOOL_SCHEMAS, make_executor, run_agent_turn
+from chat.agent import TOOL_SCHEMAS, make_executor, run_agent_turn
 
 reply, steps, protocol = run_agent_turn(
     client, messages, tool_schemas=TOOL_SCHEMAS,
@@ -61,7 +61,7 @@ reply, steps, protocol = run_agent_turn(
 ```
 
 `run_agent_turn` 是无状态的：给它 messages，还你协议消息。"一个 case 一个目录"正是
-工具层收 `root` 换来的（见 `packages/chat-agent/chat_agent/agent/tools.py` 顶部注释）。
+工具层收 `root` 换来的（见 `packages/chat/src/chat/agent/tools.py` 顶部注释）。
 
 ## 会话日志在评估里的角色
 
