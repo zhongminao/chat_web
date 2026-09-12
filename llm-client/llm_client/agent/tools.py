@@ -296,6 +296,11 @@ _TOOL_FUNCS = {
 # 这些数值参数，小模型经常传成字符串（"10" 而不是 10），分发时统一转 int
 _NUMERIC_FIELDS = {"offset", "limit", "timeout"}
 
+# 工具失败的统一前缀。这是 tools.py 与 loop.py 之间的**契约**：
+# execute_tool 从不抛异常，所以 loop.py 判断不了成功与否，只能认这个前缀。
+# 抽成常量是为了别让两处各写一遍字符串 —— 格式一改，ok 字段会静默失效。
+TOOL_ERROR_PREFIX = "[tool error] "
+
 
 def execute_tool(name: str, arguments_raw: str) -> str:
     """执行一次工具调用，任何情况都返回文本，绝不抛异常。
@@ -304,12 +309,15 @@ def execute_tool(name: str, arguments_raw: str) -> str:
     arguments_raw: 模型给的参数，JSON 字符串（可能不合法，小模型常犯）。
 
     成功 → 执行函数自己的输出文本；
-    失败 → "[tool error] ..." 错误文本。错误会回喂给模型，让它能自救/重试。
+    失败 → TOOL_ERROR_PREFIX 开头的错误文本。错误会回喂给模型，让它能自救/重试。
+
+    契约：**从不抛异常**，所以调用方（loop.py）只能靠这个前缀判断成败。
+    改前缀就等于改契约，TOOL_ERROR_PREFIX 是唯一的定义处。
     """
     func = _TOOL_FUNCS.get(name)
     if func is None:
         return (
-            f"[tool error] unknown tool: {name}. "
+            f"{TOOL_ERROR_PREFIX}unknown tool: {name}. "
             f"Available tools: {', '.join(_TOOL_FUNCS)}"
         )
 
@@ -317,9 +325,9 @@ def execute_tool(name: str, arguments_raw: str) -> str:
     try:
         args = json.loads(arguments_raw)
     except json.JSONDecodeError:
-        return f"[tool error] arguments not valid JSON: {arguments_raw[:200]}"
+        return f"{TOOL_ERROR_PREFIX}arguments not valid JSON: {arguments_raw[:200]}"
     if not isinstance(args, dict):
-        return f"[tool error] arguments must be a JSON object, got {type(args).__name__}"
+        return f"{TOOL_ERROR_PREFIX}arguments must be a JSON object, got {type(args).__name__}"
 
     # 2. 只保留函数签名里有的参数。
     #    模型常塞 schema 外的多余字段，直接 func(**args) 会 TypeError。
@@ -336,11 +344,11 @@ def execute_tool(name: str, arguments_raw: str) -> str:
     try:
         return func(**args)
     except TypeError as exc:
-        return f"[tool error] bad arguments for {name}: {exc}"
+        return f"{TOOL_ERROR_PREFIX}bad arguments for {name}: {exc}"
     except ValueError as exc:
-        return f"[tool error] {exc}"
+        return f"{TOOL_ERROR_PREFIX}{exc}"
     except Exception as exc:
-        return f"[tool error] {name} crashed: {exc}"
+        return f"{TOOL_ERROR_PREFIX}{name} crashed: {exc}"
 
 TOOL_SCHEMAS = [
     READ_FILE_SCHEMA,

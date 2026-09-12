@@ -11,6 +11,8 @@
 execute_tool 契约（由 llm_client/agent/tools.py 提供）：
     execute_tool(name: str, arguments_raw: str) -> str
     arguments_raw 是模型返回的 JSON 字符串；结果/错误都以文本返回，不抛异常。
+    因为是"以文本返回"，成败只能靠 tools.TOOL_ERROR_PREFIX 前缀区分 ——
+    steps 里的 ok 就是据此算的，不是"没有异常"。
 """
 from __future__ import annotations
 
@@ -81,11 +83,14 @@ def run_agent_turn(
 
             try:
                 result = execute_tool(name, arguments_raw)
-                ok = True
+                # execute_tool 从不抛异常，失败是以 TOOL_ERROR_PREFIX 开头的文本返回的，
+                # 所以这里必须看文本。只写 ok = True 会让 ok 恒真 ——
+                # 曾经如此，结果是按 ok 统计失败率永远得 0。
+                ok = not result.startswith(_tools.TOOL_ERROR_PREFIX)
             except Exception as exc:
                 # 防弹：单个工具失败不能弄死整个循环。
                 # 错误文本回喂给模型，让它能根据原因自救/重试。
-                result = f"[tool error] {exc}"
+                result = f"{_tools.TOOL_ERROR_PREFIX}{exc}"
                 ok = False
 
             steps.append(
