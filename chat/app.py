@@ -1,3 +1,4 @@
+import json
 import os
 import time
 from pathlib import Path
@@ -15,16 +16,18 @@ STATIC_DIR = BASE_DIR / "static"
 # 位置由这里决定而不是 chat_agent：那个包是独立可安装的，不该知道仓库布局。
 STORAGE_DIR = BASE_DIR.parent / "storage"
 SESSION_DIR = STORAGE_DIR / "sessions"   # 会话日志就是状态本身
+WORKSPACE_DIR = STORAGE_DIR              # 工作区登记表 workspaces.json 放这
 
-# 会话绑定的工作目录 —— **也是将来沙箱的边界**。
+# 默认工作区的根 —— **也是将来沙箱的默认边界**。
 #
-# 现在还没有任何东西读它来限制访问（run_bash 仍是 shell=True、能走到任何地方），
-# 它只被记进会话日志。留着它是为了让"限制"将来有个明确的落点：沙箱需要的配置
-# 就是这一个值，允许 agent 活动的根。
+# 工作区现在是**实体**（id / 名字 / 根路径，登记在 storage/workspaces.json），
+# 会话的 header 里记的是它的 id 引用而不是路径快照。这个常量只在启动时用来把
+# 默认工作区登记进去（幂等）。
 #
-# 单值、可用环境变量覆盖。默认取进程的工作目录 —— systemd unit 的
-# WorkingDirectory 正是仓库根，所以现在等价于"在这份代码里干活"。
-WORKSPACE_ROOT = Path(os.environ.get("CHAT_WORKSPACE") or Path.cwd()).resolve()
+# 现在仍然**没有任何东西读它来限制访问** —— run_bash 还是 shell=True、能走到任何
+# 地方。登记表的意义是让"允许 agent 活动的根"这件事有落点：沙箱将来要判断的
+# 正是"目标路径在不在某个工作区的根下面"。
+DEFAULT_WORKSPACE_ROOT = Path(os.environ.get("CHAT_WORKSPACE") or Path.cwd()).resolve()
 DEFAULT_PROVIDER = "gpt"
 DEFAULT_MODEL_NAME = "gpt-5.5"
 DEFAULT_TEMPERATURE = 0.2
@@ -55,7 +58,47 @@ TOOL_SYSTEM_PROMPT = (
 )
 
 from chat_agent import create_client, get_model_temperature, list_providers
-from chat_agent.agent import run_agent_turn, session_store
+from chat_agent.agent import run_agent_turn, session_store, workspace_store
+
+# 启动时把默认工作区登记进登记表（幂等）。放在 import 之后 ——
+# 这个调用依赖 workspace_store，放在常量区会 NameError。
+workspace_store.ensure(WORKSPACE_DIR, DEFAULT_WORKSPACE_ROOT)
+
+
+def migrate_legacy_workspace_field() -> int:
+    """老会话的 header 里记的是工作目录**路径**（那时工作区还只是个常量），
+    现在记的是工作区 id 引用。把只有路径的那些补上 workspaceId。
+
+    幂等：补过的不会再动。只改首行，写临时文件后原子替换 —— 不这样万一半路挂了
+    会留下半截文件，而那是你的对话记录。
+
+    补不上的（路径不在登记表里）原样留着，不猜。
+    """
+    migrated = 0
+    for path in SESSION_DIR.glob("*.jsonl"):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+            if not lines:
+                continue
+            header = json.loads(lines[0])
+            if header.get("type") != "session" or header.get("workspaceId"):
+                continue
+            entry = workspace_store.by_root(WORKSPACE_DIR, header.get("workspace") or "")
+            if entry is None:
+                continue
+            header["workspaceId"] = entry["id"]
+            lines[0] = json.dumps(header, ensure_ascii=False)
+            temp_path = path.with_name(path.name + ".tmp")
+            temp_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            os.chmod(temp_path, 0o600)
+            os.replace(temp_path, path)
+            migrated += 1
+        except Exception:
+            continue
+    return migrated
+
+
+MIGRATED_SESSIONS = migrate_legacy_workspace_field()
 
 
 class TurnResult(NamedTuple):
@@ -78,11 +121,23 @@ class ChatRequest(BaseModel):
     # 没有"无状态模式"这一说 —— 前端不再持有历史，也就没有全量重发这回事。
     sessionId: str
     messages: list[ChatMessage] = Field(default_factory=list)
+    workspaceId: str | None = None     # 新会话绑到哪个工作区；老会话以 header 里记的为准
     provider: str = DEFAULT_PROVIDER
     model_name: str = DEFAULT_MODEL_NAME
     temperature: float | None = None  # None → 使用 providers.yaml 里该模型的默认温度
     system_prompt: str | None = None   # None → 用 DEFAULT_SYSTEM_PROMPT；"" → 一条 system 都不发
     tools_enabled: bool = False        # True → 附带工具并允许模型调用
+
+
+class WorkspaceRequest(BaseModel):
+    root: str = Field(min_length=1)
+
+
+class SessionSettingsRequest(BaseModel):
+    """会话级设置。目前只有这一个开关 —— 它决定的是"这个对话能做什么"，
+    所以属于对话而不是界面。"""
+
+    toolsEnabled: bool | None = None
 
 class ChatResponse(BaseModel):
     reply: str
@@ -323,6 +378,47 @@ def resolve_session_id(
     return session_id
 
 
+def resolve_workspace(
+    workspace_id: str | None,
+    ) -> dict:
+    """按客户端给的 workspaceId 找登记过的工作区；给空或找不到就回落到默认那个。
+
+    刻意**不报错**：一个指向已删工作区的 id，回落到默认比让请求失败更合理。
+    """
+    entry = workspace_store.by_id(WORKSPACE_DIR, workspace_id) if workspace_id else None
+    if entry is not None:
+        return entry
+    fallback = workspace_store.default(WORKSPACE_DIR)
+    if fallback is None:
+        fallback = workspace_store.ensure(WORKSPACE_DIR, DEFAULT_WORKSPACE_ROOT)
+    return fallback
+
+
+@app.get("/api/workspaces")
+def list_workspaces(
+    ) -> dict:
+    """工作区登记表。default 是没指定时用的那个。"""
+    return {
+        "workspaces": workspace_store.load(WORKSPACE_DIR),
+        "default": (workspace_store.default(WORKSPACE_DIR) or {}).get("id"),
+    }
+
+
+@app.post("/api/workspaces")
+def create_workspace(
+    payload: WorkspaceRequest,
+    ) -> dict:
+    """按路径登记一个工作区。同一个目录重复登记会返回原来那条（id 由路径哈希得来）。
+
+    只要求"是个存在的目录"。等做沙箱时，这里才是要收紧的地方（比如只允许
+    HOME 下面、或只允许预先登记过的根）。
+    """
+    root = Path(payload.root).expanduser()
+    if not root.is_dir():
+        raise HTTPException(status_code=400, detail="not an existing directory")
+    return {"workspace": workspace_store.ensure(WORKSPACE_DIR, root)}
+
+
 @app.post("/api/sessions")
 def create_session(
     ) -> dict:
@@ -331,16 +427,16 @@ def create_session(
 
 @app.get("/api/sessions")
 def list_sessions(
+    workspaceId: str | None = None,
     ) -> dict:
-    """侧栏用的会话列表。
+    """侧栏用的会话列表，按工作区过滤。
 
-    workspace 放顶层而不是每行重复一遍：当前服务只有一个工作区（进程的
-    WorkingDirectory）。行级那个 workspace 字段是给将来"多工作区、按区分组"
-    留的，现在每行都一样。
+    切到别的工作区时不该还看见另一个工作区的对话，所以过滤放在服务端做。
     """
+    workspace = resolve_workspace(workspaceId)
     return {
-        "workspace": str(WORKSPACE_ROOT),
-        "sessions": session_store.list_sessions(SESSION_DIR),
+        "workspace": workspace,
+        "sessions": session_store.list_sessions(SESSION_DIR, workspace["id"]),
     }
 
 
@@ -350,15 +446,36 @@ def get_session(
     ) -> dict:
     """取一场会话，供前端渲染。
 
-    返回的 items 已是**渲染顺序**（user / step / assistant 交替），前端照着 map
-    一遍即可 —— 分别给 messages 和 steps 两张平铺表会让工具步骤错位。
+    items 已是**渲染顺序**（user / step / assistant 交替），前端照着 map 一遍即可
+    —— 分别给 messages 和 steps 两张平铺表会让工具步骤错位。
+    settings 是会话级设置（是否使用工具），前端切到这场对话时要照着恢复。
     """
     safe_id = session_store.sanitize_id(session_id)
     if safe_id is None or not session_store.exists(SESSION_DIR, safe_id):
         raise HTTPException(status_code=404, detail="session not found")
 
-    return {"id": safe_id, "workspace": session_store.load_workspace(SESSION_DIR, safe_id),
-            "items": session_store.load_items(SESSION_DIR, safe_id)}
+    return {
+        "id": safe_id,
+        "workspaceId": session_store.load_workspace_id(SESSION_DIR, safe_id),
+        "settings": session_store.load_settings(SESSION_DIR, safe_id),
+        "items": session_store.load_items(SESSION_DIR, safe_id),
+    }
+
+
+@app.patch("/api/sessions/{session_id}")
+def update_session_settings(
+    session_id: str,
+    payload: SessionSettingsRequest,
+    ) -> dict:
+    """改会话级设置。追加一条 settings 记录，后写覆盖先写。"""
+    safe_id = session_store.sanitize_id(session_id)
+    if safe_id is None:
+        raise HTTPException(status_code=400, detail="invalid sessionId")
+
+    changes = payload.model_dump(exclude_none=True)
+    if changes:
+        session_store.append_settings(SESSION_DIR, safe_id, changes)
+    return {"settings": session_store.load_settings(SESSION_DIR, safe_id)}
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -367,6 +484,12 @@ def chat(
     ) -> ChatResponse:
     started = time.monotonic()
     session_id = resolve_session_id(payload)
+    # 新会话绑到客户端指定的工作区；**老会话以 header 里记的为准** —— 绑定不该
+    # 半路变，否则历史里那些相对路径的含义就乱了。
+    bound_workspace_id = session_store.load_workspace_id(SESSION_DIR, session_id)
+    if bound_workspace_id is None:
+        bound_workspace_id = resolve_workspace(payload.workspaceId)["id"]
+
     # 历史从会话日志重放 —— 客户端只发本轮新增，服务端不信任它带的历史。
     prior_messages = [
         ChatMessage(**record) for record in session_store.load_history(SESSION_DIR, session_id)
@@ -381,7 +504,7 @@ def chat(
         session_store.append_turn(
             SESSION_DIR, session_id,
             user_messages=[], protocol=[],
-            workspace=str(WORKSPACE_ROOT),
+            workspace_id=bound_workspace_id,
             meta={
                 "error": str(exc),
                 "attempted": [message.content for message in payload.messages],
@@ -395,7 +518,7 @@ def chat(
         SESSION_DIR, session_id,
         user_messages=[message.model_dump() for message in payload.messages],
         protocol=result.trace,
-        workspace=str(WORKSPACE_ROOT),
+        workspace_id=bound_workspace_id,
         meta={
             "provider": payload.provider,
             "model": payload.model_name,

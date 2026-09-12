@@ -1,6 +1,14 @@
 import React, { useEffect, useState } from "react";
 
-import { fetchProviders, fetchSessionItems, fetchSessions, sendChat } from "./api";
+import {
+  createWorkspace,
+  fetchProviders,
+  fetchSessionItems,
+  fetchSessions,
+  fetchWorkspaces,
+  sendChat,
+  updateSessionSettings,
+} from "./api";
 import { newSessionId, readStoredSessionId, writeStoredSessionId } from "./session";
 import { readStored, writeStored } from "./storage";
 import Composer from "./components/Composer";
@@ -9,6 +17,7 @@ import SessionSidebar from "./components/SessionSidebar";
 import SystemPanel from "./components/SystemPanel";
 
 const SIDEBAR_KEY = "chat.sidebarCollapsed";
+const WORKSPACE_KEY = "chat.workspaceId";
 
 function createId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -35,7 +44,8 @@ function toDisplayItems(items) {
 export default function App() {
   const [messages, setMessages] = useState([]);
   const [sessions, setSessions] = useState([]);
-  const [workspace, setWorkspace] = useState("");
+  const [workspaceId, setWorkspaceId] = useState(() => readStored(WORKSPACE_KEY) || "");
+  const [workspaces, setWorkspaces] = useState([]);
   const [sessionId, setSessionId] = useState(() => {
     const saved = readStoredSessionId();
     if (saved) {
@@ -61,6 +71,9 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(
     () => readStored(SIDEBAR_KEY) === "1"
   );
+  // 从会话恢复设置要等默认提示词到齐才能拼系统提示词，见下面那个 effect。
+  const [loadedSettings, setLoadedSettings] = useState(null);
+  const [providersReady, setProvidersReady] = useState(false);
 
   function toggleSidebar() {
     setSidebarCollapsed((collapsed) => {
@@ -70,13 +83,19 @@ export default function App() {
   }
 
   // 侧栏数据。每轮对话结束后要重取一次 —— 标题和轮数都跟着变。
-  function refreshSessions() {
-    fetchSessions()
+  function refreshSessions(targetWorkspaceId = workspaceId) {
+    return fetchSessions(targetWorkspaceId)
       .then((data) => {
         setSessions(data.sessions || []);
-        setWorkspace(data.workspace || "");
+        // 服务端不认识客户端给的 id 时会回落到默认工作区，以它为准，别各说各的。
+        if (data.workspace?.id && data.workspace.id !== targetWorkspaceId) {
+          writeStored(WORKSPACE_KEY, data.workspace.id);
+          setWorkspaceId(data.workspace.id);
+          return data.workspace.id;
+        }
+        return targetWorkspaceId;
       })
-      .catch(() => {});
+      .catch(() => null);
   }
 
   useEffect(() => {
@@ -94,12 +113,31 @@ export default function App() {
           setProvider(list[0].provider);
           setModelName(list[0].models?.[0]?.id || "");
         }
+        setProvidersReady(true);
       })
       .catch(() => {});
   }, []);
 
   useEffect(() => {
-    refreshSessions();
+    refreshSessions(workspaceId);
+  }, [workspaceId]);
+
+  // 工作区登记表。默认工作区由服务端决定（客户端本地存的 id 可能已经被删）。
+  function refreshWorkspaces() {
+    return fetchWorkspaces()
+      .then((data) => {
+        setWorkspaces(data.workspaces || []);
+        if (!readStored(WORKSPACE_KEY) && data.default) {
+          writeStored(WORKSPACE_KEY, data.default);
+          setWorkspaceId(data.default);
+        }
+        return data;
+      })
+      .catch(() => null);
+  }
+
+  useEffect(() => {
+    refreshWorkspaces();
   }, []);
 
   // 历史归服务端，这里只拿 id 把这场对话拉回来。与上面那个 effect 分开写：
@@ -108,16 +146,29 @@ export default function App() {
     let cancelled = false;
     fetchSessionItems(sessionId)
       .then((data) => {
-        if (cancelled || !data) {
+        if (cancelled) {
           return;
         }
-        setMessages(toDisplayItems(data.items));
+        // 新会话（404）拿不到东西：清空展示，并把设置复位成默认。
+        setMessages(toDisplayItems(data?.items));
+        setLoadedSettings(data?.settings || {});
       })
       .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [sessionId]);
+
+  // 把会话级设置落到界面上。**必须等默认提示词到齐**再改 toolsEnabled ——
+  // 改它会连带拼接系统提示词，而那时 defaultSystemPrompt 还是空的，
+  // 拼出来就只剩工具说明那半截了。
+  useEffect(() => {
+    if (!providersReady || loadedSettings === null) {
+      return;
+    }
+    applyToolsEnabled(Boolean(loadedSettings.toolsEnabled));
+    setLoadedSettings(null);
+  }, [providersReady, loadedSettings]);
 
   const currentModel =
     (providers.find((item) => item.provider === provider)?.models || []).find(
@@ -144,9 +195,11 @@ export default function App() {
 
     try {
       // 只发本轮新增的这一条；历史由服务端按 sessionId 重放。
+      // workspaceId 只对新会话生效 —— 老会话以服务端 header 里记的为准。
       const data = await sendChat({
         messages: [{ role: "user", content }],
         sessionId,
+        workspaceId,
         provider,
         model_name: modelName,
         system_prompt: systemPrompt,
@@ -195,7 +248,8 @@ export default function App() {
     setMessages([]);
   }
 
-  // 从侧栏切到另一场对话：换 id 即可，历史那个 effect 会把它拉回来。
+  // 从侧栏切到另一场对话：换 id 即可，历史那个 effect 会把它拉回来
+  // （连同这场对话自己的设置 —— 是否使用工具是跟着对话走的）。
   function selectSession(nextSessionId) {
     if (nextSessionId === sessionId) {
       return;
@@ -205,10 +259,29 @@ export default function App() {
     setMessages([]);
   }
 
-  // 勾选工具模式时把工具说明拼进面板（看得见的拼接，不是后端黑盒），
-  // 取消时还原成勾选前的提示词。拼好的全文随请求原样发送，后端不再自动拼接。
-  function handleToolsToggle(event) {
-    const next = event.target.checked;
+  // 切工作区 = 开一场新对话。一个对话只属于一个工作区，绑定之后不该半路改。
+  function selectWorkspace(nextWorkspaceId) {
+    if (nextWorkspaceId === workspaceId) {
+      return;
+    }
+    writeStored(WORKSPACE_KEY, nextWorkspaceId);
+    setWorkspaceId(nextWorkspaceId);
+    clearMessages();
+  }
+
+  async function addWorkspace(root) {
+    const entry = await createWorkspace(root);
+    await refreshWorkspaces();
+    selectWorkspace(entry.id);
+    return entry;
+  }
+
+  // 工具模式开关：开时把工具说明拼进面板（看得见的拼接，不是后端黑盒），
+  // 关时还原成开之前的提示词。拼好的全文随请求原样发送，后端不再自动拼接。
+  //
+  // 抽成函数是因为它有两个入口：用户勾选框，以及**从会话恢复设置**。
+  // 只在勾选框里做拼接的话，恢复那条路会漏掉拼接，面板显示的和实际发出去的就对不上。
+  function applyToolsEnabled(next) {
     if (next) {
       setBaseSnapshot(systemPrompt || defaultSystemPrompt);
       setToolsEnabled(true);
@@ -223,6 +296,13 @@ export default function App() {
     }
   }
 
+  function handleToolsToggle(event) {
+    const next = event.target.checked;
+    applyToolsEnabled(next);
+    // 存回这场对话 —— 切走再切回来时它跟着变回来。
+    updateSessionSettings(sessionId, { toolsEnabled: next }).catch(() => {});
+  }
+
   function restoreDefaultSystemPrompt() {
     setBaseSnapshot(defaultSystemPrompt);
     setSystemPrompt(
@@ -235,11 +315,14 @@ export default function App() {
   return (
     <main className="page">
       <SessionSidebar
-        workspace={workspace}
+        workspace={workspaces.find((item) => item.id === workspaceId) || null}
+        workspaces={workspaces}
         sessions={sessions}
         activeId={sessionId}
         collapsed={sidebarCollapsed}
         onToggle={toggleSidebar}
+        onSelectWorkspace={selectWorkspace}
+        onAddWorkspace={addWorkspace}
         onSelect={selectSession}
         onNew={clearMessages}
       />

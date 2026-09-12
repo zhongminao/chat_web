@@ -5,9 +5,40 @@ export async function fetchProviders() {
   return response.json();
 }
 
-// 侧栏用：{workspace, sessions: [{id, title, workspace, turns, lastActivity, createdAt}]}
-export async function fetchSessions() {
-  const response = await fetch("/api/sessions");
+// 侧栏用：{workspace, sessions: [{id, title, workspaceId, turns, lastActivity}]}
+// 按工作区过滤放在服务端做 —— 切到别的工作区时不该还看见另一个工作区的对话。
+export async function fetchSessions(workspaceId) {
+  const query = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : "";
+  const response = await fetch(`/api/sessions${query}`);
+  return response.json();
+}
+
+// {workspaces: [{id, name, root}], default: "<id>"}
+export async function fetchWorkspaces() {
+  const response = await fetch("/api/workspaces");
+  return response.json();
+}
+
+export async function createWorkspace(root) {
+  const response = await fetch("/api/workspaces", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ root }),
+  });
+  if (!response.ok) {
+    throw new Error("路径不是一个存在的目录");
+  }
+  const data = await response.json();
+  return data.workspace;
+}
+
+// 会话级设置（是否使用工具）。它属于对话，不属于界面。
+export async function updateSessionSettings(sessionId, settings) {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(settings),
+  });
   return response.json();
 }
 

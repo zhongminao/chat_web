@@ -68,6 +68,7 @@
 }
 
 .sidebar-head {
+  position: relative;         /* 工作区弹出菜单的定位基准 */
   flex: none;
   display: flex;
   align-items: center;
@@ -75,22 +76,113 @@
   height: 44px;
 }
 
-.sidebar-workspace {
+.workspace-button {
   flex: 1;
   min-width: 0;
   display: flex;
   align-items: center;
-  padding: 0 10px;
+  gap: 4px;
+  height: 32px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
   font-size: 14px;
   font-weight: 600;
-  color: var(--dsw-alias-label-primary);
-  overflow: hidden;
+  cursor: pointer;
+}
+
+.workspace-button:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
 }
 
 .sidebar-workspace-name {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: left;
+}
+
+/* 工作区菜单。语汇同 .model-popup（向上/向下弹的那套），只是往下弹 —— 它在顶部。 */
+.workspace-popup {
+  position: absolute;
+  top: calc(100% - 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 320px;
+  padding: 6px;
+  overflow-y: auto;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-1);
+  box-shadow: var(--dsw-shadow-lv2);
+}
+
+.workspace-option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspace-option:hover,
+.workspace-option.is-selected {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.workspace-option-name {
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.workspace-option-path {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-caption);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;             /* 路径太长时先省略开头，末端目录名才是要紧的 */
+  text-align: left;
+}
+
+.workspace-add {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px;
+}
+
+.workspace-add input {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-base);
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.workspace-add-error {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-state-business-primary);
 }
 
 .sidebar-toggle {

@@ -40,19 +40,28 @@ const storedItems = [
 ];
 
 /* 侧栏用的会话列表。 */
+const workspacePayload = {
+  workspaces: [
+    { id: "ws-bc8da407", name: "chat", root: "/home/zhong/mydisk/tools/chat" },
+    { id: "ws-8c393341", name: "tmp", root: "/tmp" },
+  ],
+  default: "ws-bc8da407",
+};
+
 const sessionList = {
-  workspace: "/home/zhong/mydisk/tools/chat",
+  workspace: workspacePayload.workspaces[0],
   sessions: [
     { id: "web-test-restore", title: "侧栏里的会话标题", turns: 3,
-      lastActivity: Date.now(), workspace: "/home/zhong/mydisk/tools/chat" },
+      lastActivity: Date.now(), workspaceId: "ws-bc8da407" },
   ],
 };
 
 let failures = 0;
 
-async function scenario(name, { withUrl = true, seedSession = null, sessionItems = null, collapsed = false } = {}) {
+async function scenario(name, { withUrl = true, seedSession = null, sessionItems = null, collapsed = false, expectTools = false } = {}) {
   const pageErrors = [];
   const fetchCalls = [];
+  const patched = [];
 
   const dom = new JSDOM(html, {
     // url 不能省：jsdom 默认 origin 是 about:blank（不透明 origin），访问 localStorage
@@ -75,14 +84,20 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
     window.localStorage.setItem("chat.sidebarCollapsed", "1");
   }
 
-  window.fetch = (url) => {
+  window.fetch = (url, options) => {
     const target = String(url);
     fetchCalls.push(target);
-    // 注意 /api/sessions 与 /api/sessions/<id> 是两个不同的接口，别用 includes 混了
+    if (options?.method === "PATCH") {
+      patched.push({ url: target, body: options.body });
+    }
+    // 三个接口的路径要分清：/api/workspaces、/api/sessions（可带 ?workspaceId=）、
+    // /api/sessions/<id>。用 includes 一刀切会把它们搞混。
     let body = providers;
-    if (target.includes("/api/sessions/")) {
+    if (target.includes("/api/workspaces")) {
+      body = workspacePayload;
+    } else if (target.includes("/api/sessions/")) {
       body = sessionItems ?? {};
-    } else if (target.endsWith("/api/sessions")) {
+    } else if (target.includes("/api/sessions")) {
       body = sessionList;
     }
     return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
@@ -129,6 +144,27 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
     check("新对话按钮在", text.includes("新对话"));
   }
   check("收起/展开按钮在", !!window.document.querySelector(".sidebar-toggle"));
+  // 工具开关跟着**对话**走：接口说这场对话开了工具，勾选框就该是勾上的。
+  const toolsBox = window.document.querySelector(".tool-toggle input[type=checkbox]");
+  check("工具模式勾选框状态与接口一致",
+        toolsBox?.checked === expectTools, `实得 ${toolsBox?.checked}`);
+
+  // 点一下开关：应该把新状态 PATCH 回这场对话（这是"开关绑定对话"的关键一步，
+  // 只渲染不点的话，上面那条断言证明不了写回这条路是通的）。
+  // 不去核对具体 id：新会话的 id 是当场随机生成的，抓不到；核对"打到会话接口
+  // + body 是翻转后的状态"已经足够说明这条路通了。
+  toolsBox?.click();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const writeBack = patched.find((call) => /\/api\/sessions\/.+/.test(call.url));
+  let wroteTools = null;
+  try {
+    wroteTools = writeBack ? JSON.parse(writeBack.body).toolsEnabled : null;
+  } catch (error) {
+    wroteTools = "解析失败";
+  }
+  check("点开关会把新状态写回这场对话",
+        wroteTools === !expectTools,
+        `PATCH ${writeBack ? writeBack.url.replace(/^.*\/api/, "/api") : "(没发生)"} body.toolsEnabled=${wroteTools}`);
 
   if (pageErrors.length) {
     console.log("  --- 页面报错 ---");
@@ -144,10 +180,13 @@ const fresh = await scenario("1. 全新会话");
 console.log(`  ${/web-\d+/.test(fresh.fetchCalls.join(" ")) ? "✅" : "❌"} 自己生成了 sessionId 并去取历史`);
 if (!/web-\d+/.test(fresh.fetchCalls.join(" "))) failures += 1;
 
-// 场景 2：localStorage 里有 id -> 应把服务端历史拉回来渲染
-const restored = await scenario("2. 恢复历史（刷新不丢对话）", {
+// 场景 2：localStorage 里有 id -> 应把服务端历史拉回来渲染，
+// 并恢复这场对话自己的设置（这里设为开了工具）
+const restored = await scenario("2. 恢复历史 + 会话级设置", {
   seedSession: "web-test-restore",
-  sessionItems: { id: "web-test-restore", items: storedItems },
+  sessionItems: { id: "web-test-restore", workspaceId: "ws-bc8da407",
+                  settings: { toolsEnabled: true }, items: storedItems },
+  expectTools: true,
 });
 const checkRestored = (label, condition) => {
   console.log(`  ${condition ? "✅" : "❌"} ${label}`);

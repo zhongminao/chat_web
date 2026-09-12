@@ -151,13 +151,13 @@ def append_turn(
     user_messages: list[dict[str, Any]],
     protocol: list[dict[str, Any]],
     meta: dict[str, Any],
-    workspace: str | None = None,
+    workspace_id: str | None = None,
     ) -> Path | None:
     """追加一轮。失败返回 None（调用方不该因此失败 —— 但会话模式下这是状态，
     所以失败要显式处理，不能像日志那样静默）。
 
-    workspace: 这场对话绑定的**工作目录绝对路径**。只在首行 header 里记一次 ——
-    它一旦绑定就不该变（半路换目录，历史里那些相对路径的含义就全乱了）。
+    workspace_id: 这场对话绑定的工作区**引用**（不是路径快照）。只在首行 header
+    里记一次 —— 它一旦绑定就不该变（半路换目录，历史里那些相对路径的含义就全乱了）。
     """
     try:
         path = session_file(base_dir, session_id)
@@ -173,7 +173,7 @@ def append_turn(
                         "version": VERSION,
                         "id": session_id,
                         "createdAt": int(time.time() * 1000),
-                        "workspace": workspace,
+                        "workspaceId": workspace_id,
                     },
                     ensure_ascii=False,
                 )
@@ -227,10 +227,11 @@ def derive_title(records: list[dict[str, Any]]) -> str:
     return "(空对话)"
 
 
-def list_sessions(base_dir: Path | str) -> list[dict[str, Any]]:
-    """列会话元数据：id / 标题 / 工作区 / 创建时间 / 轮数 / 最后活动。
+def list_sessions(base_dir: Path | str, workspace_id: str | None = None) -> list[dict[str, Any]]:
+    """列会话元数据：id / 标题 / 所属工作区 / 创建时间 / 轮数 / 最后活动。
 
-    按最后活动倒序 —— 侧栏就是这么排的。
+    按最后活动倒序 —— 侧栏就是这么排的。给了 workspace_id 就只列那个工作区下的：
+    切到别的工作区时，不该还看见另一个工作区的对话。
     """
     result: list[dict[str, Any]] = []
     try:
@@ -239,12 +240,15 @@ def list_sessions(base_dir: Path | str) -> list[dict[str, Any]]:
             if not records:
                 continue
             header = records[0] if records[0].get("type") == "session" else {}
+            owner = header.get("workspaceId")
+            if workspace_id is not None and owner != workspace_id:
+                continue
             turns = [r for r in records if r.get("type") == "turn"]
             result.append(
                 {
                     "id": path.stem,
                     "title": derive_title(records),
-                    "workspace": header.get("workspace"),
+                    "workspaceId": owner,
                     "createdAt": header.get("createdAt"),
                     "turns": len(turns),
                     "lastActivity": turns[-1].get("time") if turns else header.get("createdAt"),
@@ -256,9 +260,53 @@ def list_sessions(base_dir: Path | str) -> list[dict[str, Any]]:
     return result
 
 
-def load_workspace(base_dir: Path | str, session_id: str) -> str | None:
-    """这场会话绑定的工作目录（首行 header 里那个）。"""
+def load_workspace_id(base_dir: Path | str, session_id: str) -> str | None:
+    """这场会话绑定的工作区（首行 header 里的引用）。"""
     for record in read_records(base_dir, session_id)[:1]:
         if record.get("type") == "session":
-            return record.get("workspace")
+            return record.get("workspaceId")
     return None
+
+
+# ---------------------------------------------------------------------------
+# 会话级设置
+# ---------------------------------------------------------------------------
+#
+# 「是否使用工具」这类开关决定的是**这个对话能做什么**，所以它属于对话，不属于界面。
+# 落在日志里（`settings` 记录，后写覆盖先写），切到别的对话时跟着变回来。
+#
+# 兜底：老会话没有 settings 记录，就退回去读它最后一轮的 toolsEnabled ——
+# 那时候这个开关是每轮记在 turn 元信息里的，信息本来就在，不用迁移。
+
+def append_settings(
+    base_dir: Path | str,
+    session_id: str,
+    settings: dict[str, Any],
+    ) -> None:
+    try:
+        path = session_file(base_dir, session_id)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        record = {"type": "settings", "time": int(time.time() * 1000), **settings}
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        return
+
+
+def load_settings(base_dir: Path | str, session_id: str) -> dict[str, Any]:
+    records = read_records(base_dir, session_id)
+    settings: dict[str, Any] = {}
+    for record in records:
+        if record.get("type") == "settings":
+            settings.update(
+                {key: value for key, value in record.items() if key not in ("type", "time")}
+            )
+    if "toolsEnabled" not in settings:
+        last_turn = next(
+            (r for r in reversed(records) if r.get("type") == "turn" and "toolsEnabled" in r),
+            None,
+        )
+        if last_turn is not None:
+            settings["toolsEnabled"] = last_turn["toolsEnabled"]
+    return settings
