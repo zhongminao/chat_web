@@ -65,9 +65,9 @@ EDIT_FILE_SCHEMA = {
             "old_text must be copied character-for-character from the file "
             "(read_file first, never invent content), and must match exactly once; "
             "errors tell you if it is missing or ambiguous. You must have read the "
-            "file in this session, and it must be unchanged since that read — if it "
-            "changed on disk you will be told to re-read it, because your picture of "
-            "the file is then out of date."
+            "file in this session. If it changed on disk since that read you will "
+            "be stopped once and told how much it changed — re-read the part your "
+            "change depends on before retrying."
         ),
         "parameters": {
             "type": "object",
@@ -129,8 +129,9 @@ WRITE_FILE_SCHEMA = {
             "overwrites it if it does. Parent directories are created "
             "automatically. Use ONLY for new files or complete rewrites; for a "
             "small targeted change in an existing file, use edit_file instead. "
-            "Overwriting an existing file requires having read it in this session "
-            "and it being unchanged since that read."
+            "Overwriting an existing file requires having read it in this session; "
+            "if it changed on disk since then you will be stopped once and told how "
+            "much it changed."
         ),
         "parameters": {
             "type": "object",
