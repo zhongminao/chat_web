@@ -37,57 +37,70 @@
 /* ===========================================================================
  * 侧栏：工作区 + 会话历史
  * ---------------------------------------------------------------------------
- * 规格对齐 DSH：
- *   默认宽 280px（上游 ui-layout/src/client/columns.ts 的 SIDEBAR_DEFAULT；
- *     min 264 / max 420，这里不做拖拽所以取默认值）
- *   内边距 12px、新会话按钮 38px 高 / 圆角 12px / 字号 14px
- *     （ui-sidebar 的 SidebarRoot.module.css，New Session 那段）
- *   视口 < 1024px 自动收起（上游的 SIDEBAR_AUTO_COLLAPSE）—— 上游收成 56px
- *     的图标 rail，这里还没有 rail，直接隐藏
- * 条目沿用本应用已有的语汇：圆角 10px（同 .model-cell），hover 用
- * --dsw-alias-interactive-bg-hover。
+ * 数值全部取自 DSH 上游，不是估的：
+ *   宽 280px            ui-layout/src/client/columns.ts 的 SIDEBAR_DEFAULT
+ *   收起 56px           columns.ts 的 SIDEBAR_COLLAPSED
+ *   padding 6px 12px    ui-sidebar 的 SidebarRoot.module.css（--dsh-sidebar-inline-padding）
+ *   背景 specific-sidebar-fill；字号 14px；滚动条换 l2 那一组 token
+ *   标题行 60px / padding 8px 0 8px 4px / margin-bottom 8px（上游的 logoRow）
+ *   新对话 38px 高 / 圆角 12px / 1px 边框 / button-elevated-fill，hover 换 floating-hover
+ *   图标按钮 28×28 圆形、label-secondary 墨色；收起的 rail 里 36×36、换 primary 墨色
+ *   会话行圆角 8px、padding 0 8px；标题 14/20、次要信息 12px 用 label-tertiary
+ *     （ui-workspace 的 rows/Rows.module.css）
+ *   窄于 1024px 自动收起（上游 SIDEBAR_AUTO_COLLAPSE）
  * ======================================================================== */
 
 .sidebar {
+  --dsh-sidebar-inline-padding: 12px;
   flex: none;
   display: flex;
   flex-direction: column;
-  gap: 8px;
   width: 280px;
-  padding: 12px;
-  background: var(--dsw-alias-bg-layer-1);
+  height: 100%;
+  padding: 6px var(--dsh-sidebar-inline-padding);
+  box-sizing: border-box;
+  background: var(--dsw-specific-sidebar-fill);
   border-right: 1px solid var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  /* 侧栏浮在对话面之上，滚动条滑块用 l2 那一对 */
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 }
 
-/* 收起后缩成一条窄条，宽度取上游的 SIDEBAR_COLLAPSED —— 收起不等于消失，
-   展开按钮留在原地，不用去别处找入口。 */
+/* 收起后缩成一条窄条（上游的 SIDEBAR_COLLAPSED）—— 收起不等于消失，
+   展开按钮留在原地，不用去别处找入口。rail 的内边距也是上游那组。 */
 .sidebar.is-collapsed {
   width: 56px;
-  align-items: center;
-  padding: 12px 6px;
+  padding: 18px 10px 6px;
+  align-items: flex-start;
 }
 
+/* 上游的 logoRow：60px 高，控件靠右，底部留 8px。 */
 .sidebar-head {
   position: relative;         /* 工作区弹出菜单的定位基准 */
   flex: none;
   display: flex;
   align-items: center;
-  gap: 4px;
-  height: 44px;
+  justify-content: flex-end;
+  gap: 8px;
+  height: 60px;
+  padding: 8px 0 8px 4px;
+  margin-bottom: 8px;
+  box-sizing: border-box;
 }
 
 .workspace-button {
   flex: 1;
   min-width: 0;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 32px;
   padding: 0 8px;
   border: none;
   border-radius: 8px;
   background: transparent;
-  color: var(--dsw-alias-label-primary);
+  color: inherit;
   font-family: inherit;
   font-size: 14px;
   font-weight: 600;
@@ -106,7 +119,35 @@
   text-align: left;
 }
 
-/* 工作区菜单。语汇同 .model-popup（向上/向下弹的那套），只是往下弹 —— 它在顶部。 */
+.sidebar-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sidebar-toggle:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.sidebar.is-collapsed .sidebar-toggle {
+  width: 36px;
+  height: 36px;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 工作区菜单。表面 token 与 .model-popup 一致 —— 同一个应用里的浮层应该是同一种面。 */
 .workspace-popup {
   position: absolute;
   top: calc(100% - 4px);
@@ -117,20 +158,35 @@
   flex-direction: column;
   gap: 2px;
   max-height: 320px;
-  padding: 6px;
+  padding: 4px;
   overflow-y: auto;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 1px solid var(--dsw-alias-border-inverted);
   border-radius: 12px;
-  background: var(--dsw-alias-bg-layer-1);
-  box-shadow: var(--dsw-shadow-lv2);
+  background: var(--dsw-specific-menu);
+  box-shadow: var(--dsw-shadow-lv3);
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
 }
 
 .workspace-option {
   display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 8px;
+}
+
+.workspace-option:hover,
+.workspace-option.is-selected {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.workspace-option-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
   flex-direction: column;
   gap: 2px;
-  width: 100%;
-  padding: 8px 10px;
+  padding: 6px 8px;
   border: none;
   border-radius: 8px;
   background: transparent;
@@ -140,9 +196,8 @@
   cursor: pointer;
 }
 
-.workspace-option:hover,
-.workspace-option.is-selected {
-  background: var(--dsw-alias-interactive-bg-hover);
+.workspace-option-main.is-add {
+  width: 100%;
 }
 
 .workspace-option-name {
@@ -153,7 +208,7 @@
 .workspace-option-path {
   font-size: 12px;
   line-height: 16px;
-  color: var(--dsw-alias-label-caption);
+  color: var(--dsw-alias-label-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -161,76 +216,94 @@
   text-align: left;
 }
 
+/* 行内操作：上游 rows/Rows.module.css 的做法 —— 平时不占位，hover 才出现。 */
+.row-action {
+  flex: none;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-right: 6px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.workspace-option:hover .row-action {
+  display: inline-flex;
+}
+
+.row-action:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
 .workspace-add {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
   padding: 6px;
 }
 
 .workspace-add input {
+  width: 100%;
   height: 32px;
-  padding: 0 10px;
+  padding: 0 8px;
+  box-sizing: border-box;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
-  background: var(--dsw-alias-bg-base);
+  background: var(--dsw-alias-button-elevated-fill);
   color: var(--dsw-alias-label-primary);
   font-family: inherit;
   font-size: 13px;
+  outline: none;
 }
 
-.workspace-add-error {
+.workspace-error {
+  padding: 6px 8px;
   font-size: 12px;
   line-height: 16px;
   color: var(--dsw-alias-state-business-primary);
 }
 
-.sidebar-toggle {
-  flex: none;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--dsw-alias-label-caption);
-  font-family: inherit;
-  font-size: 15px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.sidebar-toggle:hover {
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-primary);
-}
-
 .new-session-button {
   flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   height: 38px;
   padding: 8px 16px;
-  border: none;
+  margin: 0 2px 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 12px;
-  background: var(--dsw-alias-interactive-bg-hover);
+  background: var(--dsw-alias-button-elevated-fill);
   color: var(--dsw-alias-label-primary);
   font-family: inherit;
   font-size: 14px;
+  font-weight: 500;
   line-height: 22px;
   cursor: pointer;
 }
 
 .new-session-button:hover {
-  background: var(--dsw-alias-border-l1);
+  background: var(--dsw-alias-button-floating-hover);
 }
 
+/* 会话列表。左右负外边距抵消侧栏内边距，让滚动条贴到侧栏边缘（上游 regionArea 的做法）。 */
 .session-list {
   flex: 1;
   min-height: 0;              /* flex 子项默认 min-height:auto 会撑破容器 */
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin: 0 -4px;
-  padding: 0 4px;
+  margin-left: -4px;
+  margin-right: calc(-1 * var(--dsh-sidebar-inline-padding));
+  padding-left: 4px;
   overflow-y: auto;
 }
 
@@ -239,9 +312,9 @@
   flex-direction: column;
   gap: 2px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 6px 8px;
   border: none;
-  border-radius: 10px;
+  border-radius: 8px;
   background: transparent;
   color: var(--dsw-alias-label-primary);
   font-family: inherit;
@@ -265,13 +338,13 @@
 .session-item-meta {
   font-size: 12px;
   line-height: 16px;
-  color: var(--dsw-alias-label-caption);
+  color: var(--dsw-alias-label-tertiary);
 }
 
 .session-empty {
-  padding: 8px 10px;
+  padding: 8px;
   font-size: 13px;
-  color: var(--dsw-alias-label-caption);
+  color: var(--dsw-alias-label-tertiary);
 }
 
 /* 上游在这个断点把侧栏收成 56px 的控制 rail；这里没有 rail，先直接隐藏。

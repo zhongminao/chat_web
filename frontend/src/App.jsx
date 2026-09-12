@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 
 import {
   createWorkspace,
+  deleteWorkspace,
   fetchProviders,
   fetchSessionItems,
   fetchSessions,
@@ -74,6 +75,8 @@ export default function App() {
   // 从会话恢复设置要等默认提示词到齐才能拼系统提示词，见下面那个 effect。
   const [loadedSettings, setLoadedSettings] = useState(null);
   const [providersReady, setProvidersReady] = useState(false);
+  // 说过的对话，工具开关锁死（服务端也会拒绝改，这里只是让界面说实话）。
+  const [toolsLocked, setToolsLocked] = useState(false);
 
   function toggleSidebar() {
     setSidebarCollapsed((collapsed) => {
@@ -152,6 +155,7 @@ export default function App() {
         // 新会话（404）拿不到东西：清空展示，并把设置复位成默认。
         setMessages(toDisplayItems(data?.items));
         setLoadedSettings(data?.settings || {});
+        setToolsLocked(Boolean(data?.toolsLocked));
       })
       .catch(() => {});
     return () => {
@@ -276,6 +280,16 @@ export default function App() {
     return entry;
   }
 
+  async function removeWorkspace(targetWorkspaceId) {
+    const data = await deleteWorkspace(targetWorkspaceId);
+    setWorkspaces(data.workspaces || []);
+    // 删掉的正是当前这个 -> 落到默认那个（服务端保证至少还剩一个）。
+    if (targetWorkspaceId === workspaceId && data.default) {
+      selectWorkspace(data.default);
+    }
+    return data;
+  }
+
   // 工具模式开关：开时把工具说明拼进面板（看得见的拼接，不是后端黑盒），
   // 关时还原成开之前的提示词。拼好的全文随请求原样发送，后端不再自动拼接。
   //
@@ -323,6 +337,7 @@ export default function App() {
         onToggle={toggleSidebar}
         onSelectWorkspace={selectWorkspace}
         onAddWorkspace={addWorkspace}
+        onRemoveWorkspace={removeWorkspace}
         onSelect={selectSession}
         onNew={clearMessages}
       />
@@ -338,13 +353,17 @@ export default function App() {
           </button>
           <label
             className="tool-toggle"
-            title="勾选后模型可调用 read/write/edit/bash 工具，面板会自动拼入工具说明"
+            title={
+              toolsLocked
+                ? "这个对话已经说过了，工具开关不再可改 —— 它决定系统提示词里有没有工具说明，中途改会让模型看到的历史缺一块。要换就开新对话。"
+                : "勾选后模型可调用 read/write/edit/bash 工具，面板会自动拼入工具说明"
+            }
           >
             <input
               type="checkbox"
               checked={toolsEnabled}
               onChange={handleToolsToggle}
-              disabled={isLoading}
+              disabled={isLoading || toolsLocked}
             />
             工具模式
           </label>

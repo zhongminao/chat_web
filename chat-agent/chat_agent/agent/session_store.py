@@ -268,6 +268,10 @@ def load_workspace_id(base_dir: Path | str, session_id: str) -> str | None:
     return None
 
 
+def turn_count(base_dir: Path | str, session_id: str) -> int:
+    return sum(1 for record in read_records(base_dir, session_id) if record.get("type") == "turn")
+
+
 # ---------------------------------------------------------------------------
 # 会话级设置
 # ---------------------------------------------------------------------------

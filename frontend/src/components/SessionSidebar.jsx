@@ -1,24 +1,24 @@
 import React, { useEffect, useRef, useState } from "react";
 
+// 月日 + 时刻。原先当天只显示时刻，跨天后只有一个 MM-DD —— 分不清是哪天几点
+// 发生的事，所以统一带上日期。
 function formatTime(ms) {
   if (!ms) {
     return "";
   }
   const at = new Date(ms);
-  const now = new Date();
-  if (at.toDateString() === now.toDateString()) {
-    return `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
-  }
-  return `${at.getMonth() + 1}-${at.getDate()}`;
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
 }
 
 // 左侧栏：工作区 + 会话历史。
 //
-// 收起时不留整条空白，缩成一条窄条（宽 56px，对齐上游 SIDEBAR_COLLAPSED），
+// 收起时不留整条空白，缩成一条窄条（对齐上游 SIDEBAR_COLLAPSED 的 56px），
 // 里面只放展开按钮 —— 收起之后仍然点得到，不用去顶栏找入口。
 //
 // 工作区是个实体（id / 名字 / 根路径），所以这里是可点的：点开列出已登记的工作区，
-// 也能按路径新登记一个。切换工作区等于开始一场新对话（一个对话只属于一个工作区）。
+// 也能按路径新登记一个、或删掉一个。切换工作区等于开始一场新对话
+// （一个对话只属于一个工作区）。
 export default function SessionSidebar({
   workspace,
   workspaces,
@@ -28,6 +28,7 @@ export default function SessionSidebar({
   onToggle,
   onSelectWorkspace,
   onAddWorkspace,
+  onRemoveWorkspace,
   onSelect,
   onNew,
 }) {
@@ -54,11 +55,15 @@ export default function SessionSidebar({
     return () => document.removeEventListener("mousedown", handlePointerDown);
   }, [isMenuOpen]);
 
-  function pickWorkspace(id) {
-    onSelectWorkspace(id);
+  function closeMenu() {
     setIsMenuOpen(false);
     setIsAdding(false);
     setError("");
+  }
+
+  function pickWorkspace(id) {
+    onSelectWorkspace(id);
+    closeMenu();
   }
 
   async function submitWorkspace(event) {
@@ -73,6 +78,16 @@ export default function SessionSidebar({
       pickWorkspace(entry.id);
     } catch (addError) {
       setError(addError.message);
+    }
+  }
+
+  async function removeWorkspace(event, id) {
+    event.stopPropagation();   // 别让它冒泡成"选中这个工作区"
+    try {
+      await onRemoveWorkspace(id);
+      setError("");
+    } catch (removeError) {
+      setError(removeError.message);
     }
   }
 
@@ -123,19 +138,34 @@ export default function SessionSidebar({
         {isMenuOpen ? (
           <div className="workspace-popup" role="menu">
             {workspaces.map((item) => (
-              <button
+              <div
                 key={item.id}
-                type="button"
-                role="menuitemradio"
-                aria-checked={item.id === workspace?.id}
                 className={
-                  item.id === workspace?.id ? "workspace-option is-selected" : "workspace-option"
+                  item.id === workspace?.id
+                    ? "workspace-option is-selected"
+                    : "workspace-option"
                 }
-                onClick={() => pickWorkspace(item.id)}
               >
-                <span className="workspace-option-name">{item.name}</span>
-                <span className="workspace-option-path">{item.root}</span>
-              </button>
+                <button
+                  type="button"
+                  role="menuitemradio"
+                  aria-checked={item.id === workspace?.id}
+                  className="workspace-option-main"
+                  onClick={() => pickWorkspace(item.id)}
+                >
+                  <span className="workspace-option-name">{item.name}</span>
+                  <span className="workspace-option-path">{item.root}</span>
+                </button>
+                <button
+                  type="button"
+                  className="row-action"
+                  onClick={(event) => removeWorkspace(event, item.id)}
+                  aria-label={`删除工作区 ${item.name}`}
+                  title="删除这个工作区（里面还有对话时会失败）"
+                >
+                  ✕
+                </button>
+              </div>
             ))}
 
             {isAdding ? (
@@ -147,17 +177,18 @@ export default function SessionSidebar({
                   placeholder="目录绝对路径"
                   aria-label="新工作区路径"
                 />
-                {error ? <div className="workspace-add-error">{error}</div> : null}
               </form>
             ) : (
               <button
                 type="button"
-                className="workspace-option"
+                className="workspace-option-main is-add"
                 onClick={() => setIsAdding(true)}
               >
                 <span className="workspace-option-name">添加工作区…</span>
               </button>
             )}
+
+            {error ? <div className="workspace-error">{error}</div> : null}
           </div>
         ) : null}
       </div>

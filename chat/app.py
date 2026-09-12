@@ -419,6 +419,41 @@ def create_workspace(
     return {"workspace": workspace_store.ensure(WORKSPACE_DIR, root)}
 
 
+@app.delete("/api/workspaces/{workspace_id}")
+def delete_workspace(
+    workspace_id: str,
+    ) -> dict:
+    """删掉一个工作区登记。
+
+    **下面还有会话引用它时拒绝** —— 那些会话的 header 里存的是它的 id，删掉登记
+    它们就变成了孤儿：既不在任何工作区的列表里，也没法从界面找回来。所以宁可
+    让删除失败并说清原因，也不做"悄悄让对话消失"这种事。
+    """
+    entries = workspace_store.load(WORKSPACE_DIR)
+    if not any(entry.get("id") == workspace_id for entry in entries):
+        raise HTTPException(status_code=404, detail="workspace not found")
+
+    used_by = session_store.list_sessions(SESSION_DIR, workspace_id)
+    if used_by:
+        raise HTTPException(
+            status_code=409,
+            detail=f"还有 {len(used_by)} 场对话在这个工作区里",
+        )
+
+    workspace_store.save(
+        WORKSPACE_DIR,
+        [entry for entry in entries if entry.get("id") != workspace_id],
+    )
+    remaining = workspace_store.load(WORKSPACE_DIR)
+    # 一个不剩就把它自己复活 —— 否则下一次解析工作区没有回落对象。
+    if not remaining:
+        workspace_store.ensure(WORKSPACE_DIR, DEFAULT_WORKSPACE_ROOT)
+    return {
+        "workspaces": workspace_store.load(WORKSPACE_DIR),
+        "default": (workspace_store.default(WORKSPACE_DIR) or {}).get("id"),
+    }
+
+
 @app.post("/api/sessions")
 def create_session(
     ) -> dict:
@@ -458,6 +493,10 @@ def get_session(
         "id": safe_id,
         "workspaceId": session_store.load_workspace_id(SESSION_DIR, safe_id),
         "settings": session_store.load_settings(SESSION_DIR, safe_id),
+        # 说过的对话，工具开关就锁死了：它决定系统提示词里有没有工具说明，
+        # 而历史一旦有工具协议消息，中途关掉会让 normalize_messages 把那些消息
+        # 整段丢掉 —— 模型看到的历史会凭空少一块。所以只在新对话上可选。
+        "toolsLocked": session_store.turn_count(SESSION_DIR, safe_id) > 0,
         "items": session_store.load_items(SESSION_DIR, safe_id),
     }
 
@@ -467,12 +506,21 @@ def update_session_settings(
     session_id: str,
     payload: SessionSettingsRequest,
     ) -> dict:
-    """改会话级设置。追加一条 settings 记录，后写覆盖先写。"""
+    """改会话级设置。追加一条 settings 记录，后写覆盖先写。
+
+    工具开关在会话已经说过话之后**拒绝改动** —— 界面会把它置灰，但真正的约束
+    放在服务端：不然换个客户端就能绕过去。
+    """
     safe_id = session_store.sanitize_id(session_id)
     if safe_id is None:
         raise HTTPException(status_code=400, detail="invalid sessionId")
 
     changes = payload.model_dump(exclude_none=True)
+    if "toolsEnabled" in changes and session_store.turn_count(SESSION_DIR, safe_id) > 0:
+        raise HTTPException(
+            status_code=409,
+            detail="这个对话已经说过了，工具开关不再可改 —— 请开新对话",
+        )
     if changes:
         session_store.append_settings(SESSION_DIR, safe_id, changes)
     return {"settings": session_store.load_settings(SESSION_DIR, safe_id)}

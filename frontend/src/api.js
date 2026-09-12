@@ -32,6 +32,18 @@ export async function createWorkspace(root) {
   return data.workspace;
 }
 
+// 还有对话引用它时服务端会拒绝（409）—— 那些对话会变成孤儿，找不到也回不来。
+export async function deleteWorkspace(workspaceId) {
+  const response = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}`, {
+    method: "DELETE",
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.detail || "删除失败");
+  }
+  return data;
+}
+
 // 会话级设置（是否使用工具）。它属于对话，不属于界面。
 export async function updateSessionSettings(sessionId, settings) {
   const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`, {

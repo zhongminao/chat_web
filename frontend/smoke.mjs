@@ -58,7 +58,7 @@ const sessionList = {
 
 let failures = 0;
 
-async function scenario(name, { withUrl = true, seedSession = null, sessionItems = null, collapsed = false, expectTools = false } = {}) {
+async function scenario(name, { withUrl = true, seedSession = null, sessionItems = null, collapsed = false, expectTools = false, expectLocked = false } = {}) {
   const pageErrors = [];
   const fetchCalls = [];
   const patched = [];
@@ -148,11 +148,21 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
   const toolsBox = window.document.querySelector(".tool-toggle input[type=checkbox]");
   check("工具模式勾选框状态与接口一致",
         toolsBox?.checked === expectTools, `实得 ${toolsBox?.checked}`);
+  // 说过的对话，开关锁死（服务端也会拒绝改，这里测的是界面有没有说实话）
+  check("已说过话的对话，工具开关置灰",
+        toolsBox?.disabled === expectLocked, `disabled=${toolsBox?.disabled}`);
 
-  // 点一下开关：应该把新状态 PATCH 回这场对话（这是"开关绑定对话"的关键一步，
-  // 只渲染不点的话，上面那条断言证明不了写回这条路是通的）。
-  // 不去核对具体 id：新会话的 id 是当场随机生成的，抓不到；核对"打到会话接口
-  // + body 是翻转后的状态"已经足够说明这条路通了。
+  // 会话行的时间要带月日 —— 原先当天只显示时刻，跨天只有一个 MM-DD。
+  const metaEl = window.document.querySelector(".session-item-meta");
+  if (!collapsed) {
+    check("会话行时间带月日",
+          /\d{2}-\d{2} \d{2}:\d{2}/.test(metaEl?.textContent || ""),
+          `实得 ${JSON.stringify(metaEl?.textContent)}`);
+  }
+
+  // 点一下开关：没锁的话应该把新状态 PATCH 回这场对话；锁了就不该发生任何写回。
+  // 只渲染不点的话，上面那条断言证明不了写回这条路是通的。
+  // 不去核对具体 id：新会话的 id 是当场随机生成的，抓不到。
   toolsBox?.click();
   await new Promise((resolve) => setTimeout(resolve, 20));
   const writeBack = patched.find((call) => /\/api\/sessions\/.+/.test(call.url));
@@ -162,9 +172,14 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
   } catch (error) {
     wroteTools = "解析失败";
   }
-  check("点开关会把新状态写回这场对话",
-        wroteTools === !expectTools,
-        `PATCH ${writeBack ? writeBack.url.replace(/^.*\/api/, "/api") : "(没发生)"} body.toolsEnabled=${wroteTools}`);
+  if (expectLocked) {
+    check("锁了的对话，点开关不会写回", writeBack === undefined,
+          writeBack ? `却 PATCH 了 ${writeBack.url.replace(/^.*\/api/, "/api")}` : "");
+  } else {
+    check("点开关会把新状态写回这场对话",
+          wroteTools === !expectTools,
+          `PATCH ${writeBack ? writeBack.url.replace(/^.*\/api/, "/api") : "(没发生)"} body.toolsEnabled=${wroteTools}`);
+  }
 
   if (pageErrors.length) {
     console.log("  --- 页面报错 ---");
@@ -181,12 +196,13 @@ console.log(`  ${/web-\d+/.test(fresh.fetchCalls.join(" ")) ? "✅" : "❌"} 自
 if (!/web-\d+/.test(fresh.fetchCalls.join(" "))) failures += 1;
 
 // 场景 2：localStorage 里有 id -> 应把服务端历史拉回来渲染，
-// 并恢复这场对话自己的设置（这里设为开了工具）
-const restored = await scenario("2. 恢复历史 + 会话级设置", {
+// 并恢复这场对话自己的设置（这里设为开了工具，且因为说过话而锁死）
+const restored = await scenario("2. 恢复历史 + 会话级设置（已锁）", {
   seedSession: "web-test-restore",
   sessionItems: { id: "web-test-restore", workspaceId: "ws-bc8da407",
-                  settings: { toolsEnabled: true }, items: storedItems },
+                  settings: { toolsEnabled: true }, toolsLocked: true, items: storedItems },
   expectTools: true,
+  expectLocked: true,
 });
 const checkRestored = (label, condition) => {
   console.log(`  ${condition ? "✅" : "❌"} ${label}`);
