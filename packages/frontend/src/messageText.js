@@ -28,3 +28,36 @@ export function messageToText(message) {
   }
   return String(message.content ?? "");
 }
+
+// 一次 loop = **助手那一轮的全部产出**：它说了什么 + 它调了哪些工具。
+//
+// 边界只能靠 user 条目认出来：一条 user 之后、下一条 user 之前，中间那些条目就是
+// 那一轮的助手侧。**提问本身不算在内** —— 界面上左右两个气泡是两种东西，用户要
+// 复制的"这一轮 agent 干了什么"不该把问题也卷进来。
+//
+// 返回的是每一段的起止下标（只覆盖助手侧，所以 start 指向 user 之后的第一个条目）。
+export function assistantTurnRanges(messages) {
+  const ranges = [];
+  let current = null;
+  (messages || []).forEach((message, index) => {
+    if (message.role === "user") {
+      current = null;      // 提问既结束上一段，也不属于任何一段助手侧
+      return;
+    }
+    if (!current) {
+      current = { start: index, end: index };
+      ranges.push(current);
+    } else {
+      current.end = index;
+    }
+  });
+  return ranges;
+}
+
+/** 一段助手 loop 的文本：各条目之间空一行；空条目（plan、正在跑的工具）自然丢掉。 */
+export function assistantTurnToText(messages) {
+  return (messages || [])
+    .map(messageToText)
+    .filter(Boolean)
+    .join("\n\n");
+}

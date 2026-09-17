@@ -3,22 +3,24 @@
 import React, { useEffect, useRef, useState } from "react";
 
 import { copyText } from "../clipboard";
-import { messageToText } from "../messageText";
+import { assistantTurnRanges, assistantTurnToText, messageToText } from "../messageText";
 import { IconCheckOutline16, IconCopyOutline16 } from "../icons";
 import MarkdownContent from "./MarkdownContent";
 
-// 复制按钮 = DSH 的 IconActions 那一套（ui-conversation/src/client/chat/
-// MessageIconActions.{tsx,module.css} 的逐条对应）：
+// 复制控件。两种长相，一套状态机：
 //
-//   图标按钮 28×28、圆角 28px、透明底、label-tertiary 色；悬停换成
-//   interactive-bg-hover 底 + label-secondary 色；复制成功后**把图标换成对勾**
-//   停 1 秒（不换文案 —— 那会让按钮宽度跳一下）。
+//   icon=true   28×28 图标按钮，复制成功后把图标换成对勾（DSH 的
+//               MessageIconActions 就是这么做的：图标按钮 28×28、圆角 28px、
+//               透明底 label-tertiary，悬停换 interactive-bg-hover 底 +
+//               label-secondary 色）
+//   icon=false  文字胶囊「复制整段」，挂在**段尾**，用来区分"更大范围"的操作 ——
+//               两个都是图标的话点错是必然的
 //
-// 与上游唯一的出入：上游 writeClipboard 失败时静默（不声称成功），这里额外把
-// 图标染成错误色并给出 title。原因是本服务跑在纯 HTTP 上，手机那个 origin 没有
+// 与上游唯一的出入：上游 writeClipboard 失败时静默（不声称成功），这里额外把控件
+// 染成错误色并给出 title。原因是本服务跑在纯 HTTP 上，手机那个 origin 没有
 // clipboard API，只能走 execCommand 回退 —— 两条路都可能不通，"点了没反应"
 // 是这里最需要避免的状态。
-function CopyIconButton({ text, label }) {
+function CopyControl({ text, label, icon = false }) {
   const [state, setState] = useState("idle");   // idle | copied | failed
   const timer = useRef(null);
 
@@ -47,14 +49,52 @@ function CopyIconButton({ text, label }) {
   return (
     <button
       type="button"
-      className={`message-action${state === "failed" ? " is-failed" : ""}`}
+      className={`${icon ? "message-action" : "message-copy-turn"}${state === "failed" ? " is-failed" : ""}`}
       onClick={handleClick}
       title={title}
       aria-label={title}
     >
-      {state === "copied" ? <IconCheckOutline16 /> : <IconCopyOutline16 />}
+      {icon
+        ? (state === "copied" ? <IconCheckOutline16 /> : <IconCopyOutline16 />)
+        : (state === "copied" ? "已复制" : state === "failed" ? "复制失败" : label)}
     </button>
   );
+}
+
+// 这一行要不要画。抽出来是因为"整段按钮挂在哪一行"也要用同一个判断：
+// 段尾那一条可能是个空正文的 assistant（它不画），按钮就得往上找最近画出来的那条。
+function isRendered(message) {
+  if (message.role === "plan") {
+    return false;
+  }
+  if (message.role === "assistant" && !String(message.content || "").trim()) {
+    return false;
+  }
+  if (
+    message.role === "bash-request" &&
+    (message.status === "pending" || message.status === "submitting")
+  ) {
+    return false;
+  }
+  return true;
+}
+
+// 每一段助手 loop 的「复制整段」挂在哪一行、复制出什么。
+function turnCopyTargets(messages) {
+  const targets = new Map();
+  for (const range of assistantTurnRanges(messages)) {
+    const text = assistantTurnToText(messages.slice(range.start, range.end + 1));
+    if (!text) {
+      continue;   // 整段没内容（比如只有一条 plan）就不挂按钮
+    }
+    for (let index = range.end; index >= range.start; index -= 1) {
+      if (isRendered(messages[index])) {
+        targets.set(index, text);
+        break;
+      }
+    }
+  }
+  return targets;
 }
 
 // 对话区。四类条目共用同一套气泡：user / assistant / tool-step / tool-running。
@@ -67,9 +107,12 @@ function CopyIconButton({ text, label }) {
 // 轮询过程中出现，用来回答"现在到底卡在哪一步"—— 没有它的话，进度只能显示到
 // 上一个**跑完**的步骤，中间那段等待看起来就还是"正在思考"。
 export default function MessageList({ messages, isLoading }) {
+  // 每一段助手 loop 的「复制整段」挂在哪一行、复制出什么。
+  const turnTargets = turnCopyTargets(messages);
+
   return (
     <section className="chat-box">
-      {messages.map((message) => {
+      {messages.map((message, index) => {
         // 待审批 / 正在提交的 bash 请求**不进对话流**：审批交互只在输入端
         // （Composer 位置的审批面板），免得它把对话本身挤开。
         // 跑完之后才以普通工具步骤的形式出现，和 read_file/run_bash 一样可折叠。
@@ -78,15 +121,11 @@ export default function MessageList({ messages, isLoading }) {
         // 的轮次里，模型只调用工具、没说任何话），画出来就是一个空气泡 —— 界面看着
         // 像出错了。判断放在这里而不是只放在 MarkdownContent 里：后者只能去掉里层
         // 的 .markdown-content，外层 .bubble 照样占一行。
-        if (
-          message.role === "plan" ||
-          (message.role === "assistant" && !String(message.content || "").trim()) ||
-          (message.role === "bash-request" &&
-            (message.status === "pending" || message.status === "submitting"))
-        ) {
+        if (!isRendered(message)) {
           return null;
         }
         const copyText = messageToText(message);
+        const turnText = turnTargets.get(index);
         return (
         <div
           key={message.id}
@@ -131,10 +170,14 @@ export default function MessageList({ messages, isLoading }) {
               assistant 侧是正文下方的 footer（margin-top 16、左移 6 做光学对齐，
               因为 28px 的点击区比字形宽出 6px）。
               没有可复制文本的行（正在执行、未知条目）整条不画 —— 否则会留一个
-              28px 高的空行。 */}
-          {copyText ? (
+              28px 高的空行。
+
+              「复制整段」只在**一段助手 loop 的末尾**出现：一整段包含助手说过的
+              每一句和它调过的每个工具。它不含你的提问 —— 那是另一个气泡的事。 */}
+          {copyText || turnText ? (
             <div className="message-actions">
-              <CopyIconButton text={copyText} label="复制" />
+              <CopyControl text={copyText} label="复制" icon />
+              {turnText ? <CopyControl text={turnText} label="复制整段" /> : null}
             </div>
           ) : null}
         </div>
