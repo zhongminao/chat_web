@@ -1,6 +1,38 @@
-import React from "react";
+import React, { useState } from "react";
 
+import { copyText } from "../clipboard";
+import { messageToText, turnRanges, turnToText } from "../messageText";
 import MarkdownContent from "./MarkdownContent";
+
+// 复制按钮：自己管「已复制 / 失败」这点局部状态，不往上交给 App ——
+// 它是纯界面状态，跟会话数据无关。
+//
+// 失败要**显眼**：这个服务是纯 HTTP，手机那个 origin 拿不到 clipboard API，
+// 只能走 execCommand 回退；万一两条路都不通，用户必须看得见，而不是按了没反应。
+function CopyButton({ text, label, title }) {
+  const [state, setState] = useState("idle");
+
+  if (!text) {
+    return null;
+  }
+
+  async function handleClick() {
+    const ok = await copyText(text);
+    setState(ok ? "done" : "failed");
+    window.setTimeout(() => setState("idle"), 1400);
+  }
+
+  return (
+    <button
+      type="button"
+      className={`message-copy${state === "failed" ? " is-failed" : ""}`}
+      onClick={handleClick}
+      title={title}
+    >
+      {state === "done" ? "已复制" : state === "failed" ? "复制失败" : label}
+    </button>
+  );
+}
 
 // 对话区。四类条目共用同一套气泡：user / assistant / tool-step / tool-running。
 //
@@ -12,9 +44,14 @@ import MarkdownContent from "./MarkdownContent";
 // 轮询过程中出现，用来回答"现在到底卡在哪一步"—— 没有它的话，进度只能显示到
 // 上一个**跑完**的步骤，中间那段等待看起来就还是"正在思考"。
 export default function MessageList({ messages, isLoading }) {
+  // 每一段 loop 的起止下标。按钮挂在**段首**那一行上 —— 一段 loop 总是从一条
+  // user 条目开始，所以"复制整段"放在你的提问旁边最符合直觉。
+  const ranges = turnRanges(messages);
+  const rangeByStart = new Map(ranges.map((range) => [range.start, range]));
+
   return (
     <section className="chat-box">
-      {messages.map((message) => {
+      {messages.map((message, index) => {
         // 待审批 / 正在提交的 bash 请求**不进对话流**：审批交互只在输入端
         // （Composer 位置的审批面板），免得它把对话本身挤开。
         // 跑完之后才以普通工具步骤的形式出现，和 read_file/run_bash 一样可折叠。
@@ -31,11 +68,28 @@ export default function MessageList({ messages, isLoading }) {
         ) {
           return null;
         }
+        const turn = rangeByStart.get(index);
         return (
         <div
           key={message.id}
           className={message.role === "user" ? "message-row user-row" : "message-row"}
         >
+          {/* 操作条：悬停才出现（触屏上常显，见 CSS 的 @media (hover: none)）。
+              每行一个「复制」，段首那一行多一个「复制整段」。 */}
+          <div className="message-actions">
+            <CopyButton
+              text={messageToText(message)}
+              label="复制"
+              title="复制这一条"
+            />
+            {turn ? (
+              <CopyButton
+                text={turnToText(messages.slice(turn.start, turn.end + 1))}
+                label="复制整段"
+                title="复制这一段：你的提问 + 这一轮 agent 的全部产出（含工具输出）"
+              />
+            ) : null}
+          </div>
           <div className={message.role === "user" ? "bubble user-bubble" : "bubble"}>
             {message.role === "tool-step" ? (
               <details className="tool-step">

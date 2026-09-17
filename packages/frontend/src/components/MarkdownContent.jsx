@@ -1,5 +1,7 @@
 import React, { useState } from "react";
 
+import { copyText } from "../clipboard";
+
 const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 
 function safeHref(rawHref) {
@@ -306,10 +308,11 @@ function CodeBlock({ code, language }) {
   const shownLanguage = language || "text";
 
   async function copyCode() {
-    if (!navigator.clipboard?.writeText) return;
-    await navigator.clipboard.writeText(code);
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1200);
+    // 走共用的 copyText：它带 execCommand 回退，所以纯 HTTP 的手机上也能用
+    // （只写 navigator.clipboard 的话，那里根本不存在这个 API）。
+    const ok = await copyText(code);
+    setCopied(ok ? "done" : "failed");
+    window.setTimeout(() => setCopied("idle"), 1200);
   }
 
   return (
@@ -317,7 +320,7 @@ function CodeBlock({ code, language }) {
       <div className="markdown-code-toolbar">
         <span className="markdown-code-language">{shownLanguage}</span>
         <button className="markdown-code-copy" type="button" onClick={copyCode}>
-          {copied ? "已复制" : "复制"}
+          {copied === "done" ? "已复制" : copied === "failed" ? "复制失败" : "复制"}
         </button>
       </div>
       <pre className="markdown-code-block"><code>{code}</code></pre>

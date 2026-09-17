@@ -1086,9 +1086,92 @@ kindsCheck("行间公式原样保留（含 \\\\ 换行符与换行）",
            mathNode?.textContent === MD_DISPLAY_MATH,
            `实得 ${JSON.stringify(mathNode?.textContent)}`);
 
+// 场景 10：复制按钮。两个粒度（单条 / 整段 loop）+ 一处文本清理。
+//
+// 为什么单列一个场景：复制这条路**从界面上看不出对错** —— 按下去没反应、复制到
+// 空字符串、把 spill 定位符也带进去，这三种都不报错、不白屏，只有粘出来才发现。
+// 所以这里逐字比对写进剪贴板的内容。
+const SPILL_RESULT = "$ cat big.log\nline1\n\n...[4096 chars omitted]...\n\nline9\n[full output: 8123 chars saved to /tmp/chat-spill/2026-09-18/001122-abc123.log — the middle above was elided. Read it with read_file (page it with offset/limit), or grep/sed it with run_bash.]\n[exit code: 0]";
+const copyScene = await scenario("10. 复制（单条 / 整段）", {
+  seedSession: "web-copy",
+  sessionItems: {
+    id: "web-copy", workspaceId: "ws-bc8da407",
+    settings: { toolsEnabled: true }, toolsLocked: true, running: false,
+    items: [
+      { kind: "user", content: "帮我看看日志" },
+      { kind: "assistant", content: "先跑一下" },
+      { kind: "step", tool: "run_bash", arguments: '{"command":"cat big.log"}',
+        result: SPILL_RESULT, ok: true },
+      { kind: "assistant", content: "日志里 line9 是异常点。" },
+      { kind: "user", content: "下一个问题" },
+      { kind: "assistant", content: "第二个回答" },
+    ],
+  },
+  expectTools: true, expectLocked: true,
+});
+const copyCheck = (label, condition, detail = "") => {
+  console.log(`  ${condition ? "✅" : "❌"} ${label}${detail ? "  " + detail : ""}`);
+  if (!condition) failures += 1;
+};
+const copyButtonsIn = (row) => [...row.querySelectorAll(".message-copy")];
+const rows = [...copyScene.document.querySelectorAll(".chat-box .message-row")];
+copyCheck("每行都有「复制」按钮", rows.length > 0 && rows.every((row) => copyButtonsIn(row).length >= 1),
+          `实得 ${JSON.stringify(rows.map((row) => copyButtonsIn(row).length))}`);
+// 段首（两条 user）那一行才有「复制整段」。
+const withTurn = rows.map((row, i) => (copyButtonsIn(row).length === 2 ? i : -1)).filter((i) => i >= 0);
+copyCheck("只有段首那一行多一个「复制整段」", withTurn.length === 2, `实得行号 ${JSON.stringify(withTurn)}`);
+
+// 单条复制：点 user 那一行
+copyButtonsIn(rows[0])[0]?.click();
+await new Promise((resolve) => setTimeout(resolve, 30));
+copyCheck("单条复制：user 提问写进剪贴板", copyScene.clipboardWrites.at(-1) === "帮我看看日志",
+          `实得 ${JSON.stringify(copyScene.clipboardWrites.at(-1))}`);
+
+// 整段复制：点第一段的「复制整段」（第二个按钮）
+copyButtonsIn(rows[0])[1]?.click();
+await new Promise((resolve) => setTimeout(resolve, 30));
+const turnText = copyScene.clipboardWrites.at(-1) || "";
+copyCheck("整段复制：含提问、助手正文、工具输出",
+           turnText.startsWith("帮我看看日志\n\n先跑一下\n\n") && turnText.endsWith("日志里 line9 是异常点。"),
+           `实得 ${JSON.stringify(turnText.slice(0, 60))}…`);
+copyCheck("整段复制：不含 spill 定位符（那行是给模型的，不是给人看的）",
+           !turnText.includes("chat-spill") && !turnText.includes("full output:"),
+           `仍含 ${JSON.stringify(turnText.match(/\[full output:[^\]]*\]/)?.[0] || "")}`);
+copyCheck("整段复制：省略标记留着（少了内容这件事不能被抹掉）",
+           turnText.includes("...[4096 chars omitted]..."));
+copyCheck("整段复制：不含下一段的内容", !turnText.includes("第二个回答"));
+copyCheck("整段复制：不带「我：/ 助手：」标记", !/我：|助手：/.test(turnText));
+
+// 单条复制工具输出时，同样去掉定位符
+copyButtonsIn(rows[2])[0]?.click();
+await new Promise((resolve) => setTimeout(resolve, 30));
+copyCheck("单条复制工具输出：去掉 spill 定位符",
+           !String(copyScene.clipboardWrites.at(-1)).includes("full output:"),
+           `实得 ${JSON.stringify(String(copyScene.clipboardWrites.at(-1)).slice(-70))}`);
+
+// 第二段 loop 只含它自己那两条
+copyButtonsIn(rows[4])[1]?.click();
+await new Promise((resolve) => setTimeout(resolve, 30));
+copyCheck("第二段 loop 的内容是它自己的两条",
+           copyScene.clipboardWrites.at(-1) === "下一个问题\n\n第二个回答",
+           `实得 ${JSON.stringify(copyScene.clipboardWrites.at(-1))}`);
+
+// 回退路径：手机上（http + 非 localhost）拿不到 navigator.clipboard，必须不抛异常地降级。
+Object.defineProperty(copyScene.document.defaultView.navigator, "clipboard", {
+  configurable: true, value: undefined,
+});
+let fallbackThrew = false;
+try {
+  copyButtonsIn(rows[0])[0]?.click();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+} catch {
+  fallbackThrew = true;
+}
+copyCheck("没有 clipboard API 时降级而不是抛异常", !fallbackThrew);
+
 console.log();
 if (failures) {
   console.log(`失败 ${failures} 项`);
   process.exit(1);
 }
-console.log("UI 冒烟测试通过（10 个场景）");
+console.log("UI 冒烟测试通过（11 个场景）");

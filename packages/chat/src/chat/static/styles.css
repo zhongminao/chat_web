@@ -1055,6 +1055,65 @@
   width: 100%;
   max-width: var(--dsh-chat-content-width);
   margin: 0 auto 16px;
+  /* 操作条是绝对定位的，锚在这一行上 */
+  position: relative;
+}
+
+/* ---------------------------------------------------------------------------
+ * 每条消息的操作条（复制）
+ * --------------------------------------------------------------------------
+ * 悬停才出现：它平时不该占视觉重量，对话本身才是内容。
+ * 但**触屏设备上必须常显** —— 手机上根本没有 hover，藏起来就等于没有这个功能。
+ * user 行靠右，所以操作条挂在左侧，免得盖住气泡。
+ * ------------------------------------------------------------------------- */
+.message-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity var(--ds-transition-duration-fast, 0.15s) var(--ds-ease-in-out, ease);
+}
+
+.message-row:hover .message-actions,
+.message-row:focus-within .message-actions {
+  opacity: 1;
+}
+
+.user-row .message-actions {
+  right: auto;
+  left: 0;
+}
+
+.message-copy {
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 11px;
+  background: var(--dsw-alias-bg-layer-1, var(--dsw-alias-bg-primary));
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.message-copy:hover {
+  border-color: var(--dsw-alias-border-l2);
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 复制失败要说出来：纯 HTTP 的手机上 clipboard API 不存在，万一回退也失败，
+   静默无反应比报错更让人迷惑。 */
+.message-copy.is-failed {
+  border-color: var(--dsw-alias-state-error-primary);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+@media (hover: none) {
+  .message-actions {
+    opacity: 1;
+  }
 }
 
 .message-row:last-child {
