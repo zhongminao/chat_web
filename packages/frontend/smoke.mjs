@@ -1086,7 +1086,7 @@ kindsCheck("行间公式原样保留（含 \\\\ 换行符与换行）",
            mathNode?.textContent === MD_DISPLAY_MATH,
            `实得 ${JSON.stringify(mathNode?.textContent)}`);
 
-// 场景 10：复制按钮。两个粒度（单条 / 整段 loop）+ 一条硬语义。
+// 场景 10：复制按钮（每条消息一个，图标按钮，在气泡下面）。
 //
 // 为什么单列一个场景：复制这条路**从界面上看不出对错** —— 按下去没反应、复制到
 // 空字符串、把内容悄悄"清理"过一遍，这三种都不报错、不白屏，只有粘出来才发现。
@@ -1097,7 +1097,7 @@ kindsCheck("行间公式原样保留（含 \\\\ 换行符与换行）",
 // 复制出来的就不再是"模型读到的东西"。全文在 /tmp/chat-spill/ 下，前端没有任何
 // 接口能读它，所以"把完整内容捞进来"在这条路上也不可能发生。
 const SPILL_RESULT = "$ cat big.log\nline1\n\n...[4096 chars omitted]...\n\nline9\n[full output: 8123 chars saved to /tmp/chat-spill/2026-09-18/001122-abc123.log — the middle above was elided. Read it with read_file (page it with offset/limit), or grep/sed it with run_bash.]\n[exit code: 0]";
-const copyScene = await scenario("10. 复制（单条 / 整段）", {
+const copyScene = await scenario("10. 复制（每条消息一个）", {
   seedSession: "web-copy",
   sessionItems: {
     id: "web-copy", workspaceId: "ws-bc8da407",
@@ -1118,48 +1118,46 @@ const copyCheck = (label, condition, detail = "") => {
   console.log(`  ${condition ? "✅" : "❌"} ${label}${detail ? "  " + detail : ""}`);
   if (!condition) failures += 1;
 };
-const copyButtonsIn = (row) => [...row.querySelectorAll(".message-copy")];
 const rows = [...copyScene.document.querySelectorAll(".chat-box .message-row")];
-copyCheck("每行都有「复制」按钮", rows.length > 0 && rows.every((row) => copyButtonsIn(row).length >= 1),
+const copyButtonsIn = (row) => [...row.querySelectorAll(".message-action")];
+copyCheck("每行正好一个复制按钮（不再有「复制整段」）",
+          rows.length === 6 && rows.every((row) => copyButtonsIn(row).length === 1),
           `实得 ${JSON.stringify(rows.map((row) => copyButtonsIn(row).length))}`);
-// 段首（两条 user）那一行才有「复制整段」。
-const withTurn = rows.map((row, i) => (copyButtonsIn(row).length === 2 ? i : -1)).filter((i) => i >= 0);
-copyCheck("只有段首那一行多一个「复制整段」", withTurn.length === 2, `实得行号 ${JSON.stringify(withTurn)}`);
+// 位置：操作条必须是气泡的**下一个兄弟**（在下面），不是浮在右上角。
+const firstRow = rows[0];
+copyCheck("操作条在气泡下面（DOM 顺序上紧跟气泡）",
+          firstRow?.children.length === 2 &&
+          firstRow.children[0].classList.contains("bubble") &&
+          firstRow.children[1].classList.contains("message-actions"),
+          `实得 ${JSON.stringify([...(firstRow?.children || [])].map((el) => el.className))}`);
+// 图标按钮：复制前是 copy 图标，成功后换成对勾（上游就是这么做的）
+const firstButton = copyButtonsIn(rows[0])[0];
+copyCheck("按钮是图标按钮（28px 点击区，无文字）",
+          firstButton?.textContent.trim() === "" && !!firstButton?.querySelector("svg"),
+          `实得 ${JSON.stringify(firstButton?.textContent)}`);
 
 // 单条复制：点 user 那一行
-copyButtonsIn(rows[0])[0]?.click();
+firstButton?.click();
 await new Promise((resolve) => setTimeout(resolve, 30));
 copyCheck("单条复制：user 提问写进剪贴板", copyScene.clipboardWrites.at(-1) === "帮我看看日志",
           `实得 ${JSON.stringify(copyScene.clipboardWrites.at(-1))}`);
+copyCheck("复制成功后按钮显示对勾（图标换了，文案没换）",
+          firstButton?.getAttribute("title") === "已复制",
+          `实得 ${JSON.stringify(firstButton?.getAttribute("title"))}`);
 
 // 单条复制工具输出：必须**逐字等于**日志里那一份（含 spill 定位符与省略标记）
 copyButtonsIn(rows[2])[0]?.click();
 await new Promise((resolve) => setTimeout(resolve, 30));
 copyCheck("单条复制工具输出 = 模型读到的那份原文（定位符与省略标记都在）",
-           copyScene.clipboardWrites.at(-1) === SPILL_RESULT,
-           `实得 ${JSON.stringify(String(copyScene.clipboardWrites.at(-1)).slice(-80))}`);
+          copyScene.clipboardWrites.at(-1) === SPILL_RESULT,
+          `实得 ${JSON.stringify(String(copyScene.clipboardWrites.at(-1)).slice(-80))}`);
 
-// 整段复制：点第一段的「复制整段」（第二个按钮）
-copyButtonsIn(rows[0])[1]?.click();
+// 助手那一条：正文原文（含 Markdown 记号，因为复制的就是原文）
+copyButtonsIn(rows[3])[0]?.click();
 await new Promise((resolve) => setTimeout(resolve, 30));
-const turnText = copyScene.clipboardWrites.at(-1) || "";
-const EXPECTED_TURN = ["帮我看看日志", "先跑一下", SPILL_RESULT, "日志里 line9 是异常点。"].join("\n\n");
-copyCheck("整段复制：逐字等于「提问 + 助手正文 + 工具输出」的原样拼接",
-           turnText === EXPECTED_TURN,
-           `实得 ${JSON.stringify(turnText.slice(0, 50))}…`);
-copyCheck("整段复制：spill 定位符保留（模型就是靠它去取关键段落的）",
-           turnText.includes("[full output: 8123 chars saved to /tmp/chat-spill/"));
-copyCheck("整段复制：省略标记也在（没有假装看全了）",
-           turnText.includes("...[4096 chars omitted]..."));
-copyCheck("整段复制：不含下一段的内容", !turnText.includes("第二个回答"));
-copyCheck("整段复制：不带「我：/ 助手：」标记", !/我：|助手：/.test(turnText));
-
-// 第二段 loop 只含它自己那两条
-copyButtonsIn(rows[4])[1]?.click();
-await new Promise((resolve) => setTimeout(resolve, 30));
-copyCheck("第二段 loop 的内容是它自己的两条",
-           copyScene.clipboardWrites.at(-1) === "下一个问题\n\n第二个回答",
-           `实得 ${JSON.stringify(copyScene.clipboardWrites.at(-1))}`);
+copyCheck("单条复制助手回复 = 日志原文",
+          copyScene.clipboardWrites.at(-1) === "日志里 line9 是异常点。",
+          `实得 ${JSON.stringify(copyScene.clipboardWrites.at(-1))}`);
 
 // 回退路径：手机上（http + 非 localhost）拿不到 navigator.clipboard，必须不抛异常地降级。
 Object.defineProperty(copyScene.document.defaultView.navigator, "clipboard", {
@@ -1173,6 +1171,9 @@ try {
   fallbackThrew = true;
 }
 copyCheck("没有 clipboard API 时降级而不是抛异常", !fallbackThrew);
+copyCheck("降级失败时按钮报错（不静默假装成功）",
+          copyButtonsIn(rows[0])[0]?.getAttribute("title") === "复制失败",
+          `实得 ${JSON.stringify(copyButtonsIn(rows[0])[0]?.getAttribute("title"))}`);
 
 console.log();
 if (failures) {

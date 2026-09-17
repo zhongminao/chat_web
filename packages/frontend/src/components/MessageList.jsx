@@ -1,16 +1,31 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 import { copyText } from "../clipboard";
-import { messageToText, turnRanges, turnToText } from "../messageText";
+import { messageToText } from "../messageText";
+import { IconCheckOutline16, IconCopyOutline16 } from "../icons";
 import MarkdownContent from "./MarkdownContent";
 
-// 复制按钮：自己管「已复制 / 失败」这点局部状态，不往上交给 App ——
-// 它是纯界面状态，跟会话数据无关。
+// 复制按钮 = DSH 的 IconActions 那一套（ui-conversation/src/client/chat/
+// MessageIconActions.{tsx,module.css} 的逐条对应）：
 //
-// 失败要**显眼**：这个服务是纯 HTTP，手机那个 origin 拿不到 clipboard API，
-// 只能走 execCommand 回退；万一两条路都不通，用户必须看得见，而不是按了没反应。
-function CopyButton({ text, label, title }) {
-  const [state, setState] = useState("idle");
+//   图标按钮 28×28、圆角 28px、透明底、label-tertiary 色；悬停换成
+//   interactive-bg-hover 底 + label-secondary 色；复制成功后**把图标换成对勾**
+//   停 1 秒（不换文案 —— 那会让按钮宽度跳一下）。
+//
+// 与上游唯一的出入：上游 writeClipboard 失败时静默（不声称成功），这里额外把
+// 图标染成错误色并给出 title。原因是本服务跑在纯 HTTP 上，手机那个 origin 没有
+// clipboard API，只能走 execCommand 回退 —— 两条路都可能不通，"点了没反应"
+// 是这里最需要避免的状态。
+function CopyIconButton({ text, label }) {
+  const [state, setState] = useState("idle");   // idle | copied | failed
+  const timer = useRef(null);
+
+  // 卸载时清掉定时器：轮询会让列表频繁重建，留着定时器会对已卸载组件 setState。
+  useEffect(() => () => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+    }
+  }, []);
 
   if (!text) {
     return null;
@@ -18,18 +33,24 @@ function CopyButton({ text, label, title }) {
 
   async function handleClick() {
     const ok = await copyText(text);
-    setState(ok ? "done" : "failed");
-    window.setTimeout(() => setState("idle"), 1400);
+    setState(ok ? "copied" : "failed");
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+    }
+    timer.current = window.setTimeout(() => setState("idle"), 1000);
   }
+
+  const title = state === "copied" ? "已复制" : state === "failed" ? "复制失败" : label;
 
   return (
     <button
       type="button"
-      className={`message-copy${state === "failed" ? " is-failed" : ""}`}
+      className={`message-action${state === "failed" ? " is-failed" : ""}`}
       onClick={handleClick}
       title={title}
+      aria-label={title}
     >
-      {state === "done" ? "已复制" : state === "failed" ? "复制失败" : label}
+      {state === "copied" ? <IconCheckOutline16 /> : <IconCopyOutline16 />}
     </button>
   );
 }
@@ -44,14 +65,9 @@ function CopyButton({ text, label, title }) {
 // 轮询过程中出现，用来回答"现在到底卡在哪一步"—— 没有它的话，进度只能显示到
 // 上一个**跑完**的步骤，中间那段等待看起来就还是"正在思考"。
 export default function MessageList({ messages, isLoading }) {
-  // 每一段 loop 的起止下标。按钮挂在**段首**那一行上 —— 一段 loop 总是从一条
-  // user 条目开始，所以"复制整段"放在你的提问旁边最符合直觉。
-  const ranges = turnRanges(messages);
-  const rangeByStart = new Map(ranges.map((range) => [range.start, range]));
-
   return (
     <section className="chat-box">
-      {messages.map((message, index) => {
+      {messages.map((message) => {
         // 待审批 / 正在提交的 bash 请求**不进对话流**：审批交互只在输入端
         // （Composer 位置的审批面板），免得它把对话本身挤开。
         // 跑完之后才以普通工具步骤的形式出现，和 read_file/run_bash 一样可折叠。
@@ -68,28 +84,12 @@ export default function MessageList({ messages, isLoading }) {
         ) {
           return null;
         }
-        const turn = rangeByStart.get(index);
+        const copyText = messageToText(message);
         return (
         <div
           key={message.id}
           className={message.role === "user" ? "message-row user-row" : "message-row"}
         >
-          {/* 操作条：悬停才出现（触屏上常显，见 CSS 的 @media (hover: none)）。
-              每行一个「复制」，段首那一行多一个「复制整段」。 */}
-          <div className="message-actions">
-            <CopyButton
-              text={messageToText(message)}
-              label="复制"
-              title="复制这一条"
-            />
-            {turn ? (
-              <CopyButton
-                text={turnToText(messages.slice(turn.start, turn.end + 1))}
-                label="复制整段"
-                title="复制这一段：你的提问 + 这一轮 agent 的全部产出（含工具输出）"
-              />
-            ) : null}
-          </div>
           <div className={message.role === "user" ? "bubble user-bubble" : "bubble"}>
             {message.role === "tool-step" ? (
               <details className="tool-step">
@@ -124,6 +124,17 @@ export default function MessageList({ messages, isLoading }) {
               message.content
             )}
           </div>
+          {/* 操作条在**气泡下面**，不在右上角浮着 —— 位置和间距照上游：
+              user 侧是「气泡 + IconActions」右对齐的竖列（gap 6）；
+              assistant 侧是正文下方的 footer（margin-top 16、左移 6 做光学对齐，
+              因为 28px 的点击区比字形宽出 6px）。
+              没有可复制文本的行（正在执行、未知条目）整条不画 —— 否则会留一个
+              28px 高的空行。 */}
+          {copyText ? (
+            <div className="message-actions">
+              <CopyIconButton text={copyText} label="复制" />
+            </div>
+          ) : null}
         </div>
         );
       })}
