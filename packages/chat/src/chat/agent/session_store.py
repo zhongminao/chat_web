@@ -9,6 +9,7 @@
     {"type":"session","version":1,"id":...,"createdAt":...}
     {"type":"turn","seq":0,"time":...,"provider":...,"model":...,
      "temperature":...,"toolsEnabled":...,"systemPrompt":...,"durationMs":...}
+    {"type":"sandbox","time":...,"mode":...}         ← 人拨了沙箱开关（log-only，见文件末尾）
     {"type":"user","content":...}
     {"type":"assistant","content":...,"tool_calls":[...]}
     {"type":"tool","tool_call_id":...,"content":...}
@@ -122,6 +123,10 @@ def load_history(base_dir: Path | str, session_id: str) -> list[dict[str, Any]]:
             message["tool_calls"] = record["tool_calls"]
         if record.get("tool_call_id"):
             message["tool_call_id"] = record["tool_call_id"]
+        # thinking 模式的思维链：**必须原样回传**，否则 DeepSeek 直接 400（见
+        # openai_client._reasoning_content_of）。它不进 items、不给前端画。
+        if record.get("reasoning_content"):
+            message["reasoning_content"] = record["reasoning_content"]
         return message
 
     for record in read_records(base_dir, session_id):
@@ -347,6 +352,9 @@ class TurnWriter:
             record["tool_calls"] = message["tool_calls"]
         if message.get("tool_call_id"):
             record["tool_call_id"] = message["tool_call_id"]
+        # 思维链要落盘：它是**重放请求的一部分**（下次请求得带回去，见 load_history）。
+        if message.get("reasoning_content"):
+            record["reasoning_content"] = message["reasoning_content"]
         self._append(record)
 
     def record_plan(self, todos: list[dict[str, Any]]) -> None:
@@ -443,6 +451,39 @@ def append_bash_result(base_dir: Path | str, session_id: str, request_id: str, *
     }])
 
 
+def pending_bash_requests(base_dir: Path | str, session_id: str) -> list[str]:
+    """这场会话里**还没被答复**的 bash 请求 id（有请求、但没有对应的 bash-result）。
+
+    用途只有一个，但很关键：决定"能不能把模型叫起来接着说"。
+    一批里两条命令时，你批准第一条，服务端**不能**立刻恢复 —— 否则模型会在第二条还挂着
+    的时候收尾抽身（它写完"回合在此暂停"就走了，审批窗口还开着，而那一轮已经结束）。
+    批里还有没答复的请求 = 这一轮还停着，等它们都答完再一次性把两份结果交给模型。
+
+    注意"执行"不受这个判断影响：**批准哪一条，哪一条立刻执行并记账** —— 被推迟的只是
+    "模型什么时候开口"。
+    """
+    from chat.agent.tools import BASH_REQUEST_PREFIX
+
+    requested: list[str] = []
+    answered: set[str] = set()
+    for record in read_records(base_dir, session_id):
+        record_type = record.get("type")
+        if record_type == "tool":
+            content = record.get("content") or ""
+            if not content.startswith(BASH_REQUEST_PREFIX):
+                continue
+            try:
+                payload = json.loads(content[len(BASH_REQUEST_PREFIX):])
+            except json.JSONDecodeError:
+                continue
+            request_id = str(payload.get("id") or "")
+            if request_id:
+                requested.append(request_id)
+        elif record_type == "bash-result":
+            answered.add(str(record.get("requestId") or ""))
+    return [rid for rid in requested if rid not in answered]
+
+
 def find_bash_request(base_dir: Path | str, session_id: str, request_id: str) -> dict[str, Any] | None:
     from chat.agent.tools import BASH_REQUEST_PREFIX
 
@@ -504,6 +545,9 @@ def last_turn_meta(base_dir: Path | str, session_id: str) -> tuple[dict[str, Any
                 "toolsEnabled": record.get("toolsEnabled"),
                 "sandboxMode": record.get("sandboxMode"),
                 "systemPrompt": record.get("systemPrompt"),
+                # 这一轮**开始**的时刻。暂停把一轮劈成几段请求，收尾时只有拿它才能算出
+                # 真实的耗时（"暂停那一刻写 turn-end"那条老毛病连耗时也是半截的）。
+                "time": record.get("time"),
             }
         elif record_type == "turn-end":
             temperature = record.get("temperature")
@@ -526,6 +570,28 @@ def delete_session(base_dir: Path | str, session_id: str) -> bool:
     except OSError:
         return False
     return True
+
+
+def turn_is_paused(base_dir: Path | str, session_id: str) -> bool:
+    """这一轮**还停在某个工具结果上**吗（= 可以"接着跑"）？
+
+    判据：最后一条**协议记录**（user / assistant / tool）是 `tool`。
+    为什么这么定：循环只在"这一批工具跑完、里面有 bash 审批请求"时暂停返回，那一刻
+    日志尾巴正是 tool 记录；而恢复一旦跑完，模型会写一条 assistant（最终答复），尾巴
+    就不再是 tool。
+
+    这个判断不是洁癖，是**必须**：模型答完之后再"恢复"，请求就会以 assistant 结尾
+    （没有新的 user 消息），DeepSeek 的 thinking 模式对那个形状回 400
+    （'The reasoning_content in the thinking mode must be passed back to the API.'）——
+    实测就是这么把一条已经跑完的轮次打死、还留下一条永远批不动的待审批。
+    """
+    for record in reversed(read_records(base_dir, session_id)):
+        record_type = record.get("type")
+        if record_type in _HISTORY_TYPES:
+            return record_type == "tool"
+        if record_type == "turn":
+            return False        # 刚开的新一轮：还没跑过任何东西
+    return False
 
 
 def turn_count(base_dir: Path | str, session_id: str) -> int:
@@ -557,16 +623,24 @@ def load_settings(base_dir: Path | str, session_id: str) -> dict[str, Any]:
         违反"记了就是同一份信息存两遍"那条规矩）。所以它的最新值可能在好几轮之前。
 
     于是语义是：turn 记录里**带 systemPrompt = 这一轮换了**，不带 = 沿用上一轮的。
+
+    sandboxMode 不在这条回溯里，它**折出来**（sandbox_mode_of）：模式随时可改，可以改在
+    两轮之间、也可以改在一轮中途（人拨开关），所以"最后一轮的 turn 记录"不是它的真相 ——
+    日志里位置最后的那条值事件才是。turn 记录里的那个值降级为历史，只参与折、不单独说话。
     """
     settings: dict[str, Any] = {}
     for record in reversed(read_records(base_dir, session_id)):
         if record.get("type") != "turn":
             continue
-        for key in ("toolsEnabled", "sandboxMode", "systemPrompt"):
+        for key in ("toolsEnabled", "systemPrompt"):
             if key not in settings and key in record:
                 settings[key] = record[key]
-        if "toolsEnabled" in settings and "sandboxMode" in settings and "systemPrompt" in settings:
+        if "toolsEnabled" in settings and "systemPrompt" in settings:
             break
+
+    mode = sandbox_mode_of(base_dir, session_id)
+    if mode is not None:
+        settings["sandboxMode"] = mode
 
     # systemPrompt 的"没记过"和"记过、值是 None（这一轮不发送系统消息）"是两回事，
     # 后者必须能被区分出来 —— 上面靠 `key in record` 区分，所以这里不能把它抹成
@@ -587,3 +661,88 @@ def system_prompt_meta(base_dir: Path | str, session_id: str,
     if "systemPrompt" in settings and settings["systemPrompt"] == effective_prompt:
         return {}
     return {"systemPrompt": effective_prompt}
+
+
+# ---------------------------------------------------------------------------
+# 沙箱模式：日志里的一条值事件 + 它的折
+# ---------------------------------------------------------------------------
+#
+# **为什么必须有这条记录**（踩过的坑，别再退回 turn 快照）：
+# 模式是"随时可改"的 —— 人可以在一轮**中途**拨开关（审批面板就横在那儿的时候）。
+# 而 turn 记录里的 `sandboxMode` 只说得清"这一轮开始时是什么"，它不会跟着变。以前
+# 恢复的循环正是从它重建执行器的（resume_after_approval），于是：workspace-write 下
+# 每调一次 run_bash 就生成一条待审批 → 停住 → 人改成 full-access → 恢复时读到的还是
+# 旧值 → 又生成一条待审批。**改多少次模式都没用**，因为那一刻服务端根本没有"你想改用
+# 什么"这条信息。
+#
+# 改法照 DSH 的 `sandbox/mode`（packages/sandbox/sandbox-policy/src/session-mode.ts）：
+# 拨开关**就是**写一条事件；当前值 = 按位置折出的最后一条；执行侧在**每次操作边界**
+# 折一遍。于是"恢复"不需要任何追赶机制 —— 重放就是状态。
+#
+# 两条纪律：
+#   - 这条记录是 **log-only**：不产 item kind（前端不认识它）、不进模型历史
+#     （load_history/load_items 只认自己那张类型表，未识别的 type 自然被跳过）；
+#   - turn 记录里的 sandboxMode 降级为**历史**：它和 `sandbox` 事件一起参与折，位置在
+#     后的赢，但**任何决策都不许只读它**（那正是上面那个死循环的形状）。
+_SANDBOX_EVENT_TYPE = "sandbox"
+
+# 按 (mtime_ns, size) 记住上次折出来的模式。执行侧**每个工具调用**都要折一次，不缓存
+# 就是每调一次重读整个 JSONL（长会话上 O(n²)）。stat 一次很便宜，而且 mtime+size 变了
+# 就重折 —— 没有"什么时候该失效"的猜测，问文件系统就行。
+_MODE_CACHE: dict[str, tuple[tuple[int, int], str | None]] = {}
+
+
+def _mode_from_records(records: list[dict[str, Any]]) -> str | None:
+    """按位置从后往前找第一条带模式的值记录。找不到 → None（**不是**默认值）。"""
+    for record in reversed(records):
+        record_type = record.get("type")
+        if record_type == _SANDBOX_EVENT_TYPE:
+            mode = str(record.get("mode") or "")
+            return mode or None
+        if record_type == "turn":
+            mode = str(record.get("sandboxMode") or "")
+            if mode:
+                return mode
+    return None
+
+
+def sandbox_mode_of(base_dir: Path | str, session_id: str) -> str | None:
+    """这场会话**此刻**的沙箱模式，或 None（从没表过态 / 文件还不存在）。
+
+    None 不替调用方定默认值：新会话的那份选择属于前端草稿，由下一次 /api/chat 的
+    payload 带上来 —— 这里说"没有"，调用方自己回落到草稿或部署默认。
+    """
+    path = session_file(base_dir, session_id)
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    key = str(path)
+    cached = _MODE_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    mode = _mode_from_records(read_records(base_dir, session_id))
+    _MODE_CACHE[key] = (stamp, mode)
+    return mode
+
+
+def append_sandbox_mode(base_dir: Path | str, session_id: str, mode: str) -> bool:
+    """把"人把开关拨到了 mode"记成一条事件 —— 这是它的**唯一**写入口。
+
+    没说过话的会话**不许**因此产生会话文件：那种选择是前端草稿，下一轮 payload 会带
+    上来（这条规矩见上面"没说过话就不该有会话文件"）。所以文件不存在时直接返回 False，
+    由调用方告诉前端"这轮先当草稿"。
+    """
+    path = session_file(base_dir, session_id)
+    if not path.is_file():
+        return False
+    ok = _append_records(path, [{
+        "type": _SANDBOX_EVENT_TYPE,
+        "time": int(time.time() * 1000),
+        "mode": mode,
+    }])
+    if ok:
+        # 折出来的值一定变了 —— 别让缓存把刚写下的这条吃掉（同毫秒内 size 也可能相同）。
+        _MODE_CACHE.pop(str(path), None)
+    return ok

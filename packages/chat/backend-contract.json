@@ -117,15 +117,21 @@
     "POST /api/sessions/{id}/bash-requests/{requestId}/approve": {
       "content": "str",
       "reply": "str",
+      "resumed": "bool",
       "status": "str"
     },
     "POST /api/sessions/{id}/bash-requests/{requestId}/reject": {
       "content": "str",
       "reply": "str",
+      "resumed": "bool",
       "status": "str"
     },
     "POST /api/sessions/{id}/interrupt": {
       "interrupted": "bool"
+    },
+    "POST /api/sessions/{id}/sandbox": {
+      "recorded": "bool",
+      "sandboxMode": "str"
     }
   },
   "enums": {

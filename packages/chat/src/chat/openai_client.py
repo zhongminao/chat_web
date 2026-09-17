@@ -261,7 +261,32 @@ class Client:
         tool_calls = cls._tool_calls_to_list(message)
         if tool_calls:
             assistant_message["tool_calls"] = tool_calls
+        reasoning = cls._reasoning_content_of(message)
+        if reasoning:
+            assistant_message["reasoning_content"] = reasoning
         return assistant_message
+
+    @staticmethod
+    def _reasoning_content_of(
+        message: Any,
+        ) -> str:
+        """thinking 模式的思维链原文（非标准字段，SDK 把它放进 model_extra）。
+
+        **必须原样带回去**：DeepSeek 的 thinking 模式在下一次请求里要求把上一轮的
+        reasoning_content 一并回传，否则整个请求 400 ——
+
+            The `reasoning_content` in the thinking mode must be passed back to the API.
+
+        丢它的后果不是"少一点信息"，而是**那一次请求直接失败**：审批后恢复的那次调用
+        500、命令其实已经跑了、模型却永远接不上话（实测：这个字段在修复前根本没进过
+        会话日志，所以重放时无从带起）。见 README「已知的小问题」。
+        """
+        raw = getattr(message, "reasoning_content", None)
+        if raw is None:
+            extra = getattr(message, "model_extra", None)
+            if isinstance(extra, dict):
+                raw = extra.get("reasoning_content")
+        return str(raw) if raw else ""
 
     @staticmethod
     def _tool_calls_to_list(

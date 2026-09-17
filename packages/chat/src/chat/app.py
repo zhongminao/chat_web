@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from chat import list_providers
 from chat.agent import session_store, workspace_store
 from chat.agent.cancel import REGISTRY, TurnCancelled
-from chat.agent.sandbox import DEFAULT_SANDBOX_MODE, normalize_mode
+from chat.agent.sandbox import DEFAULT_SANDBOX_MODE, VALID_SANDBOX_MODES, normalize_mode
 from chat.agent.tools import run_bash
 from chat.runtime import (
     DEFAULT_MODEL_NAME,
@@ -32,7 +32,9 @@ from chat.runtime import (
     request_real_reply,
     resolve_system_prompt,
     resolve_workspace,
+    abandon_paused_turn,
     resume_after_approval,
+    session_sandbox_mode,
 )
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -76,6 +78,12 @@ class WorkspaceRequest(BaseModel):
     root: str | None = None
     parent: str | None = None
     name: str | None = None
+
+
+class SandboxModeRequest(BaseModel):
+    """把沙箱开关拨到某个模式（人做的、随时可做；见下面的 /sandbox 路由）。"""
+
+    sandboxMode: str
 
 
 class ChatResponse(BaseModel):
@@ -458,11 +466,18 @@ def approve_bash_request(
     if not session_store.append_bash_result(
         SESSION_DIR, safe_id, request_id, status="executed", content=result):
         raise HTTPException(status_code=500, detail="failed to record bash result")
+    # 批不动"已经答完的那一轮"：模型给过最终答复时只把结果记进日志，不再拉起循环
+    # （拉起就是给模型发一个以 assistant 结尾的请求 → DeepSeek 400，见
+    # session_store.turn_is_paused）。resumed=False 让界面说清发生了什么。
+    # 这一批都答完了吗？没答完就不叫模型（免得它在还有命令待批的时候就收尾抽身）；
+    # 命令已经跑了、结果也记了，剩下的只是"模型什么时候开口"。
+    resumed = (session_store.turn_is_paused(SESSION_DIR, safe_id)
+               and not session_store.pending_bash_requests(SESSION_DIR, safe_id))
     reply = resume_after_approval(
         safe_id,
         approval={"requestId": request_id, "command": command, "status": "executed"},
-    )
-    return {"status": "executed", "content": result, "reply": reply}
+    ) if resumed else ""
+    return {"status": "executed", "content": result, "reply": reply, "resumed": resumed}
 
 
 @app.post("/api/sessions/{session_id}/bash-requests/{request_id}/reject")
@@ -481,6 +496,9 @@ def reject_bash_request(
         SESSION_DIR, safe_id, request_id, status="rejected", content=content):
         raise HTTPException(status_code=500, detail="failed to record bash rejection")
     # 拒绝也要恢复 loop：模型得知道这条没跑，才好继续（换个做法或把情况说清楚）。
+    # 但同样只在"这一轮还停着"时恢复 —— 模型已经答完就别再拉起来（理由见 approve）。
+    resumed = (session_store.turn_is_paused(SESSION_DIR, safe_id)
+               and not session_store.pending_bash_requests(SESSION_DIR, safe_id))
     reply = resume_after_approval(
         safe_id,
         approval={
@@ -488,8 +506,8 @@ def reject_bash_request(
             "command": str(request.get("command") or ""),
             "status": "rejected",
         },
-    )
-    return {"status": "rejected", "content": content, "reply": reply}
+    ) if resumed else ""
+    return {"status": "rejected", "content": content, "reply": reply, "resumed": resumed}
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -520,6 +538,15 @@ def chat(
     # 会回落到默认那个，不报错 —— 一场指向已删工作区的会话，还能继续用，落在默认根里。
     workspace_root = resolve_workspace(bound_workspace_id).get("root")
 
+    def current_sandbox_mode() -> str:
+        """此刻的沙箱模式：日志折出来的值说了算，新会话才用这一轮 payload 的草稿。
+
+        传的是**回调**不是字符串：循环每一步、每条工具调用都会问一次，所以人在这场
+        对话里任何时刻拨开关（包括一轮中途、包括审批等着的时候），下一条工具调用就按
+        新的走。字符串一旦被闭包冻结，"改模式不生效"就会以别的形状回来。
+        """
+        return session_sandbox_mode(session_id, payload.sandbox_mode)
+
     # **在跑之前**把提示词解析成最终那条 system 消息。
     # 它是"这一轮用的提示词"这个事实本身，所以跟着 turn 一起落盘 —— 取消的轮次也
     # 记得上（以前只在 turn-end 里记"实际生效的"，而取消时拿不到），前端也能靠它
@@ -529,6 +556,14 @@ def chat(
     prior_messages = [
         ChatMessage(**record) for record in session_store.load_history(SESSION_DIR, session_id)
     ]
+
+    # "模型以为现在是哪个模式" = 上一轮记录的那个值。拿它当基准，本轮第一步就能把
+    # "两轮之间有人改过开关"说出来；没有上一轮（新会话）时基准就是当前值 —— 没变，
+    # 一个字都不说。为什么基准不取"这一轮开始时"：那和当前值永远相等，中途改了才看得见，
+    # 而"改在轮与轮之间"恰恰是最常见的情形。
+    previous_mode = normalize_mode(
+        str(session_store.last_turn_meta(SESSION_DIR, session_id)[0].get("sandboxMode") or "")
+        or current_sandbox_mode())
 
     # 每会话互斥：同一场会话不许两轮并发跑。并发时 TurnWriter.begin() 里那句
     # `if not path.exists()` 会各写一行 header，而且两轮交错追加之后重放出来的
@@ -543,19 +578,30 @@ def chat(
     # 磁盘上也已经知道用户问了什么、用的是哪份提示词。
     writer = session_store.TurnWriter(
         SESSION_DIR, session_id, workspace_id=bound_workspace_id)
+    # 这一轮是不是**停在审批上**（跑完才知道）。停在审批上 = 这一轮没结束：
+    # 不收尾、令牌留着 —— 恢复时会把它认回来接着用。见 runtime.close_turn。
+    paused = False
     try:
         # meta 里放"跑之前就知道"的东西；**提示词只在变了的时候才放**（见
         # system_prompt_meta）—— 它一千多字，每轮写一遍等于同一份信息存 N 遍。
+        #
+        # sandboxMode 记的是**这一轮开始时**的值，是历史 —— 不是"现在是什么"。模式随时
+        # 可改（拨开关会写一条 `sandbox` 事件），真正说话的是日志里位置最后的那条值，
+        # 折法见 session_store.sandbox_mode_of。这里如实记下开跑那一刻的值，供人事后查
+        # "这一轮是从什么模式开始的"；执行侧一次都不读它。
         meta = {"provider": payload.provider, "model": payload.model_name,
                 "toolsEnabled": payload.tools_enabled,
-                "sandboxMode": normalize_mode(payload.sandbox_mode)}
+                "sandboxMode": current_sandbox_mode()}
         meta.update(session_store.system_prompt_meta(
             SESSION_DIR, session_id, effective_prompt))
         writer.begin(meta, [message.model_dump() for message in payload.messages])
         result = request_real_reply(
             payload.to_turn_request(), prior_messages, workspace_root,
             writer=writer, should_stop=token.should_stop,
+            sandbox_mode=current_sandbox_mode,
+            sandbox_baseline=previous_mode,
             observed_context_id=f"session:{session_id}")
+        paused = session_store.turn_is_paused(SESSION_DIR, session_id)
     except TurnCancelled as exc:
         # 中止**不是错误**：已经跑过的步骤都逐条落盘了。写个收尾就正常返回，
         # 由 interrupted 标记告诉前端"去重拉一次会话，把过程画出来"。
@@ -565,7 +611,14 @@ def chat(
         writer.finish(durationMs=elapsed_ms(started), error=str(exc))
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     finally:
-        REGISTRY.end(session_id, token)
+        # 停在审批上时**不注销令牌**：那一刻这一轮还在（人要批准/拒绝/停止），令牌是
+        # "/interrupt 能停它"和"界面上的 running"唯一的抓手。
+        if not paused:
+            REGISTRY.end(session_id, token)
+
+    if paused:
+        # 停在审批上：不写 turn-end（这一轮没结束），等 /approve、/reject 或 /interrupt。
+        return ChatResponse(state="ok", toolsLocked=True)
 
     writer.finish(
         durationMs=elapsed_ms(started),
@@ -580,6 +633,38 @@ def chat(
     return ChatResponse(state="ok", toolsLocked=True)
 
 
+@app.post("/api/sessions/{session_id}/sandbox")
+def set_session_sandbox(
+    session_id: str,
+    payload: SandboxModeRequest,
+    ) -> dict:
+    """人把沙箱开关拨到了某个模式 —— 记成会话日志里的一条事件（log-only）。
+
+    为什么需要这个接口：模式以前**只能**靠下一次 /api/chat 的 payload 带上来，于是
+    "一轮中途改模式"根本没有出口 —— 而那一刻恰恰最需要它：审批面板横在输入端、模型停着
+    等你回答，你改成 full-access 却发现这个选择传不出去（恢复的循环读的是这一轮开始时
+    的 turn 快照）。现在是"拨开关就是写一条事件"，执行侧每次操作边界都折一遍日志，
+    于是**下一条工具调用**就按新模式走。
+
+    没说过话的会话**不产生文件**：那种选择属于前端草稿，下一轮 /api/chat 的 payload 会
+    带上来（"没说过话就不该有会话文件"这条规矩）。这时回 recorded: false —— 前端不必
+    当成失败，它只是"还没到时候"。
+    """
+    safe_id = session_store.sanitize_id(session_id)
+    if safe_id is None:
+        raise HTTPException(status_code=400, detail="invalid sessionId")
+    mode = str(payload.sandboxMode or "").strip()
+    if mode not in VALID_SANDBOX_MODES:
+        # **不静默归一**：这是人显式做的选择，写错了就得说，别把它悄悄变成 workspace-write
+        # （normalize_mode 是给"不受信任的字符串"兜底的，不该拿来吃掉一个明确的值）。
+        raise HTTPException(status_code=400, detail=f"unknown sandbox mode: {mode}")
+    if not session_store.exists(SESSION_DIR, safe_id):
+        return {"sandboxMode": mode, "recorded": False}
+    if not session_store.append_sandbox_mode(SESSION_DIR, safe_id, mode):
+        raise HTTPException(status_code=500, detail="failed to record sandbox mode")
+    return {"sandboxMode": mode, "recorded": True}
+
+
 @app.post("/api/sessions/{session_id}/interrupt")
 def interrupt_session(
     session_id: str,
@@ -590,11 +675,22 @@ def interrupt_session(
     "正在等模型回复"或"正在跑一个慢命令"的那一下拦不住 —— 本接口立刻返回，但真正
     停下来要等当前这一步结束。前端应当显示"正在停止…"，别当成已停止。
 
+    两种情形：
+      - **循环正在跑** → 协作式取消（步边界生效）；
+      - **停在审批上**（令牌还在但没有循环在跑）→ **放弃这一轮**：没答复的请求记成
+        cancelled、写 turn-end、注销令牌。这就是"审批期间也能停止"。
+
     没在跑 → interrupted: false。**这不是错误**：用户点停止时那一轮可能刚好自己
     结束了，两者对用户是一样的结果。
     """
     safe_id = session_store.sanitize_id(session_id)
     if safe_id is None:
         raise HTTPException(status_code=400, detail="invalid sessionId")
+    token = REGISTRY.adopt(safe_id)
+    if token is not None and not token.attached:
+        # 停在审批上（令牌还在，但**没有循环在跑** → 取消信号没人接）：这时"停止"的含义
+        # 是**放弃这一轮** —— 把没答复的请求记成 cancelled、写 turn-end、注销令牌。
+        # 以前这里直接 cancel()，信号丢进空循环，界面上什么也不会发生。
+        return {"interrupted": abandon_paused_turn(safe_id, "用户点了停止")}
     return {"interrupted": REGISTRY.cancel(safe_id, "用户点了停止")}
 

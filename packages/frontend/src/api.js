@@ -153,3 +153,28 @@ export async function interruptSession(sessionId) {
   }
   return data;
 }
+
+// 拨沙箱开关。它写的是**会话日志里的一条事件**，不是一次界面状态同步 —— 服务端执行侧
+// 每次操作边界都折一遍日志，所以拨完**下一条工具调用**就按新模式走。
+//
+// 为什么必须单独发这一次：模式以前只能靠下一轮 /api/chat 的 payload 带上去，而"一轮
+// 中途改"恰恰是最想改的时候（审批面板横在输入端、模型停着等你回答）。错过那次机会，
+// 就得等这一轮结束才生效 —— 看起来就是"改了没用"。
+//
+// recorded: false 不是错误：还没说过话的会话不落盘（那种选择是前端草稿），下一轮
+// /api/chat 的 payload 会把它带上去。
+export async function updateSessionSandbox(sessionId, sandboxMode) {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/sandbox`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sandboxMode }),
+    },
+  );
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.detail || "切换沙箱模式失败");
+  }
+  return data;
+}

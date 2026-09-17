@@ -382,6 +382,29 @@
   padding: 14px 16px;
 }
 
+/* 「停止这一轮」：整轮作罢（拒绝只是"这条别跑"）。它靠左侧、弱化处理 —— 破坏性但
+   不是最常用的那个动作，不该和「允许一次」抢注意力。 */
+.bash-approval-stop {
+  margin-right: auto;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted, #8b8b8b);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.bash-approval-stop:hover:not(:disabled) {
+  border-color: var(--border, #3a3a3a);
+  color: var(--text, #e6e6e6);
+}
+
+.bash-approval-stop:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .bash-approval-reject,
 .bash-approval-allow {
   min-height: 32px;

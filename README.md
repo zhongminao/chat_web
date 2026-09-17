@@ -5,311 +5,126 @@ React + FastAPI 的聊天服务，后端带一个能真的动手的 agent（读�
 
 ## 代码结构
 
-```
-tools/chat/                        # 仓库根（git 在这一层）
-├── packages/
-│   ├── chat/                      # 唯一的 Python 包（入口是 python -m chat，没有 scripts）
-│   │   ├── backend-contract.json  # 后端响应的形状契约（见「验证」）
-│   │   ├── check_api.py           # 校验：路由真调一遍 + 契约比对
-│   │   ├── check_observed.py      # 校验：先读后改守卫
-│   │   ├── demo_agent_loop.py     # 演示：假 client 驱动真工具，不花钱
-│   │   └── src/chat/
-│   │       ├── __main__.py        # 入口①：python -m chat → uvicorn
-│   │       ├── app.py             # 只留 HTTP：路由 + 请求响应模型 + lifespan
-│   │       ├── runtime.py         # ★ 核心：路径/环境/提示词/消息归一/一轮对话/审批后恢复
-│   │       ├── run.py             # 入口②：python -m chat.run（CLI）
-│   │       ├── openai_client.py   # provider 目录 + 无状态 Client
-│   │       ├── providers.yaml     # 供应商/模型目录
-│   │       ├── prompts.yaml       # 系统提示词模板（base / tools）
-│   │       ├── static/            # 前端**产物**（提交进仓库）
-│   │       │   └── styles/        #   6 张样式表，见「前端构建」
-│   │       └── agent/             # 纯逻辑：不知道 HTTP，也不知道 CLI
-│   │           ├── loop.py            # 工具循环（无轮数上限，边跑边落盘，遇审批暂停）
-│   │           ├── tools.py           # 四个工具 + 分发 + root/沙箱/审计注入
-│   │           ├── sandbox.py         # 路径围栏：canonical containment（软链接逃逸也拦）
-│   │           ├── bash_audit.py      # bash 审计（append-only JSONL）
-│   │           ├── session_store.py   # 会话日志 + TurnWriter + 设置回溯 + bash 请求
-│   │           ├── workspace_store.py # 工作区登记表（沙箱的边界）
-│   │           ├── cancel.py          # 轮次表 + 取消令牌
-│   │           ├── observed.py        # 先读后改守卫（进程内存，按 context 隔离）
-│   │           └── spill.py           # 超长输出落 <工作区>/.chat-spill/（read_file 读得回来）
-│   └── frontend/                  # Node 包：前端源码，esbuild 打包
-├── evals/agent/                   # 评估：量 agent 做对没有
-├── storage/                       # 运行时数据（不进 git）：sessions/*.jsonl + workspaces.json + bash-audit.jsonl
-├── workplace/                     # 一个工作区目录（agent 干活的地方）
-└── start_local_qwen.sh            # 本地 Qwen3.5-2B vLLM
-```
-
-```
-__main__.py ──→ app.py ──────┐
-                             ├──→ runtime.py ──┬──→ agent/（loop + tools + sandbox + stores）
-run.py (CLI) ────────────────┘                └──→ openai_client.py ──→ providers.yaml
-```
-
-**两个入口，一个核心**：web 与 CLI 都汇到 `runtime.py`，同一份消息归一、同一份一轮逻辑、同一份日志格式。`runtime.py` 刻意不 import fastapi，CLI 和评估才能用它而不拉起 web 栈。
+`packages/chat/src/chat/`：`app.py`（HTTP）· `runtime.py`（★提示词 / 消息归一 / 一轮对话 / 审批后恢复）· `run.py`+`__main__.py`（CLI 与 web 两个入口）· `openai_client.py` + `providers.yaml` + `prompts.yaml` · `static/`（前端产物）· `agent/`（纯逻辑，不知道 HTTP 也不知道 CLI：`loop` 循环 · `tools` 工具+分发+注入 · `sandbox` 路径围栏 · `session_store` 会话日志 · `cancel` 取消令牌 · `observed` 先读后改守卫 · `bash_audit`/`spill`/`workspace_store`）。
+其余：`packages/frontend/`（前端源码，产物提交进仓库）· `evals/agent/`（评估）· `storage/`（运行时数据，不进 git）· `workplace/`（一个工作区）· `start_local_qwen.sh`。
+**两个入口，一个核心**：web 与 CLI 都汇到 `runtime.py`（同一份归一、一轮、日志格式）；它刻意不 import fastapi，CLI 与评估才能用它而不拉起 web 栈。
 
 ## 安装与启动
 
 ```bash
-pip install -e ~/mydisk/tools/chat/packages/chat   # 唯一的 Python 包
-python -m chat                                     # 默认 8200
-systemctl --user restart chat                      # 常驻；journalctl --user -u chat -f
+pip install -e ~/mydisk/tools/chat/packages/chat   # 唯一的 Python 包；移动/改名仓库后必须重装
+python -m chat                                     # 默认 8200；局域网 http://10.23.14.209:8200
+systemctl --user restart chat   # 常驻；journalctl --user -u chat -f；改后端要重启，改前端只要重新构建
 ```
-
-局域网 `http://10.23.14.209:8200`。**移动或改名仓库后必须重装上面的包**（editable 记的是绝对路径）。
-**改后端代码要重启服务**；改前端只要重新构建。
 
 ## 沙箱与审批
 
-两种模式，**每轮可改**（不像工具开关那样锁死）：
+两种模式，**随时可改**：`workspace-write`（默认）文件工具只能动工作区内、`run_bash` 不执行而是生成一次性审批请求并停住；`full-access` 都不限制。
 
-| 模式 | 文件工具 | `run_bash` |
-|---|---|---|
-| `workspace-write`（默认） | 只能读写当前工作区内 | 不执行，生成**一次性审批请求**并暂停 |
-| `full-access` | 不限制 | 直接执行 |
-
-**文件围栏**（`agent/sandbox.py`）：判断的是目标**真实路径**，不是字符串前缀 —— 先 canonicalize（软链接、`..`、`.` 全部解析），再要求落在工作区根下；目标不存在时解析"最近存在的父目录"再拼后缀，所以"软链接目录下建新文件"同样拦得住。写入前会**重新 resolve 一次**并用那个 fresh target 落盘，缩小 TOCTOU 窗口。
-
-**bash 审批**是一条完整回路：
+- **模式是日志里的一条事件，不是快照**：拨开关写一条 `{"type":"sandbox","mode":…}`（log-only：不产 item、不进模型历史），**当前值 = 最后一条**；`turn.sandboxMode` 只表示"这一轮开始时是什么"，决策不读它。没说过话的会话不落盘（前端草稿）。
+- **执行侧每次工具调用现折一遍** → 拨完开关，下一条命令就按新模式走（不必等下一轮、也不必等某次审批）。
+- **模型只在权限变了时被告知一句**，平时靠工具返回学：`[bash request]` 自带"没执行、别重试"，围栏拒绝自带原因与路径。**文件围栏**比的是真实路径（canonicalize 后必须落在工作区根下，写入前重新 resolve 一次）。
 
 ```
-workspace-write 下模型调 run_bash
-  → 生成 bashreq-xxx，写进会话日志与审计，loop **暂停**（不写最终回复）
-  → 输入端（Composer 位置）出现审批面板：命令 + cwd + 「拒绝 / 允许一次」
-  → 批准：只执行日志里那条**原始命令**（requestId 绑定，模型无法事后替换）
-      → 结果落盘 → resume_after_approval() 重新拉起循环
-      → 模型看到真实输出，继续跑到最终回复
-  → 拒绝：记录拒绝，同样恢复循环（模型知道这条没跑）
+模型调 run_bash → 生成 bashreq-xxx（写日志与审计），这一轮**停住**（不写最终回复，也不写 turn-end）
+→ 面板出现（命令 + cwd + 「停止这一轮 / 拒绝 / 允许一次」）：批准 → 只执行日志里那条**原始命令**
+  （requestId 绑定，模型无法事后替换）→ 结果落盘 → 模型继续；拒绝 → 记下"没跑"，同样让它继续
 ```
 
-- 审批面板**只在输入端**，对话流里不出现"Bash 请求"卡片；跑完才以普通工具步骤（`⚙ run_bash`）出现。
-- 恢复时把"用户批准了这条命令"**并进开头那条 system**，而不是在消息末尾再加一条：严格的 chat 模板拒收中途出现的第二条 system（vLLM 上的 Qwen 直接 400），云端 API 宽容 —— 所以这类错**只在本地模型上暴露**，症状还会伪装成"命令执行了却一直要审批"。
-- 同一批工具不会因为审批而丢：批次里其余 `read_file`/`write_file`/`edit_file` 照常跑完，只是**不再进入下一轮模型**。
-- **审计**在 `storage/bash-audit.jsonl`（append-only）：`sessionId` / `requestId` / 模式 / `cwd` / 命令 / `timeout` / `exitCode` / `stopped` / 输出大小 / `denied` + 原因。删会话**不删审计**。
+- **停住等审批是一种真状态**：`running` 仍为 `true`；`/interrupt` 的含义是**放弃这一轮**（没答复的请求记成 `cancelled` 后收尾）；`turn-end` 只在真正结束时写一次。
+- **一批里有多条命令**：全部变成待批准；批哪条哪条**当场跑**，但**全批完才唤醒模型** —— "它说话"永远在你答复之后；批次里其余工具照常跑完。
+- **审计**在 `storage/bash-audit.jsonl`（每条命令的模式 / 命令 / 用时 / 退出码）；删会话**不删审计**。
 
-> **审批保证什么、不保证什么**（重要，别误解边界）：批准的是**那一串精确字符**，不展开它内部调用了什么。`bash a` 里的 `b`/`c`/`d`、`$(...)`、`eval`、下载后执行，都不会给你看；批准后命令以 **full-access** 跑，只受 `cwd` / `timeout` / 进程组回收约束。**审批 = 人的判断锚点 + 命令防篡改，不是行为范围保证**；真正的隔离要来自 OS 层（bwrap / Landlock / 容器）。
+> **安全边界**：只在局域网可达、因此没有密码，应用层不做鉴权 —— 对外暴露前必须先加鉴权，并把 OS 级隔离做出来（bwrap / Landlock / 容器），而不是只靠审批。
+> **审批保证什么、不保证什么**：批准的是**那一串精确字符**，不展开它内部调用了什么。`bash a` 里的 `b`/`c`/`d`、`$(...)`、`eval`、下载后执行，都不会给你看；批准后命令以 **full-access** 跑，只受 `cwd` / `timeout` / 进程组回收约束，审计只记命令与输出（无进程树 / 文件改动 / 网络记录）。**审批 = 人的判断锚点 + 命令防篡改，不是行为范围保证**。
 
 ## 命令行用 agent
 
 ```bash
-python -m chat.run "把 workplace 里 README 的标题改掉"   # 一轮就退
-python -m chat.run --tools "跑一下测试，挂了就修"         # 这一轮允许用工具
-python -m chat.run -i                                   # 连着聊
-python -m chat.run --list                               # 列出会话（网页那些也在）
-python -m chat.run -s <会话id> "接着上次说"               # 续聊某一场
+python -m chat.run --tools "跑一下测试，挂了就修"            # 一轮就退（不加 --tools 不许用工具）
+python -m chat.run -i · --list · -s <会话id> "接着上次说"    # 连着聊 · 列会话 · 续聊某一场
 ```
 
-- 不带 `-i` 也能多轮：每次追加到同一场会话，下次把历史读回来（不带 `-s` 就用"上次 CLI 用的那场"）。
-- 工具开关**一场会话内固定**：第一轮 `--tools` 定下来，服务端对中途改直接 409。
-- `Ctrl-C` 中断；其它：`-p/-m`、`-w <id>`、`--sandbox`、`--system`。
-- **CLI 没有交互式审批入口**：`workspace-write` 下 bash 会停在审批请求上，要执行得走 `POST /api/sessions/{id}/bash-requests/{requestId}/approve`。
+不带 `-i` 也能多轮（追加到同一场会话，历史读回来）；工具开关**一场会话内固定**，中途改服务端 409；`Ctrl-C` 中断，其它 `-p/-m`、`-w <id>`、`--sandbox`、`--system`。**CLI 没有交互式审批入口**：`workspace-write` 下 bash 停在审批请求上，要执行得走 `POST /api/sessions/{id}/bash-requests/{requestId}/approve`。
 
 ## 前端构建
 
 ```bash
 cd packages/frontend && pnpm install   # 首次
-pnpm run build      # 产出 packages/chat/src/chat/static/app.js
-pnpm run watch      # 自动重建
-pnpm run check      # build + smoke（jsdom 里真跑产物）
+pnpm run build | watch | check         # 产出 static/app.js / 自动重建 / build + jsdom 冒烟
 ```
 
-产物**提交进仓库**，所以不碰前端的人 clone 下来直接能跑，机器上不需要 Node。
-
-**样式**拆在 `static/styles/` 下（6 张表：外壳 / 控件 / 对话 / 工具 / 输入卡 / 窄屏+弹窗，
-`index.html` 逐个 `<link>`）。表之间的先后由各文件里的 `@layer` 声明决定，**与 link 顺序无关**；
-样式不参与构建，因为 `theme.css` 是上游逐字拷贝、要保持"升级时整份覆盖"的性质。
-静态产物带 `Cache-Control: no-cache`，所以改完**普通刷新**就够，不需要强刷。
-
-**复制**（前端）：助手侧**一轮一个**按钮，复制整轮（含工具调用与输出）；工具块自己的复制
-按钮只在展开时出现。复制出来的就是日志原文 —— 包括 spill 定位符，那是模型也读到的东西。
+产物**提交进仓库**（不碰前端的人 clone 下来直接能跑，机器上不需要 Node）；样式拆在 `static/styles/` 6 张表，先后由各文件里的 `@layer` 决定、**与 link 顺序无关**；产物带 `Cache-Control: no-cache`，改完普通刷新即可。助手侧**一轮一个复制按钮**（整轮含工具调用与输出）。
 
 ## Markdown 渲染
 
-**只渲染助手正文**：`user` 消息、工具结果、bash 审批命令、`plan` 条目一律**逐字原样** ——
-用户打的字不该被改写，审批命令更是"显示的和执行的必须是同一串字符"。
-
-支持标题、段落、列表、引用、粗体、斜体、行内码、链接、GFM 表格、围栏代码块（顶部显示
-语言名 + 一键复制，只复制代码内容）、行间公式块。
-
-**唯一的硬约束是"宁可少渲染，绝不吞字符"**：模型正文是 Markdown / LaTeX / 通配路径混在
-一起的，而 `*` 在这里既可能是强调符、也可能是乘号或通配符。所以：
-
-- 星号**两侧都是 ASCII 字母数字**时永不当强调符：`3*4`、`a*b`、`m*c^2`、`src/*.py` 安全；
-- **闭**星号左边粘着 ASCII 字母数字时（`e*`、`2*`），要求**开**星号右边也粘着 ASCII（`*n`、`*P`）：
-  `长*宽 … 2*(…)`、`2**(a+b)` 安全，而中文里夹数字的粗体 `**P99 延迟**` 照常生效。
-
-这条约束刻意做成**单向**的：早先那版要求"开合两侧必须同为 ASCII 邻接"，结果把
-`**P99 延迟**`（开贴 ASCII、闭贴汉字）判成了字面量 —— 纯 ASCII、纯中文都正常，**混排才坏**，
-而混排正是中文模型输出的最高频形状。
-
-`$...$` / `$$...$$` 是**不透明区间**，内部一个字符都不解析、`$` 保留显示（不排版数学，只保证
-原样、方便整段复制）；"开 `$` 后非空白、闭 `$` 前非空白"是为了不把 `价格 $5 到 $10` 当公式。
-
-**不支持**：`_x_`、`~~删除~~`、嵌套列表、`\(...\)`、h5/h6；`***x***` 保持字面量；
-以及**汉字开头、ASCII 结尾**的混排强调（`**延迟 P99**` 是字面量 —— 那个形状和幂运算 `x**(…)`
-在字符上无法区分）。把收尾标点写进粗体里（`**延迟 P99。**`）就能正常生效。理由同上：
-猜错的方向是吞字符。这些边界由 `pnpm run check` 的 smoke 场景 9 逐条钉住。
+**只渲染助手正文**：`user` 消息、工具结果、审批命令、`plan` 条目一律**逐字原样**（审批命令尤其"显示的和执行的必须是同一串字符"）。支持标题/段落/列表/引用/粗斜体/行内码/链接/GFM 表格/围栏代码块/行间公式；`$...$` 是不透明区间（不排版数学，只保证原样可复制）。**硬约束是"宁可少渲染，绝不吞字符"**：`*` 可能既是强调符也是乘号或通配符，所以**两侧都是 ASCII 字母数字时永不当强调符**（`3*4`、`src/*.py` 安全）。不支持 `_x_`、`~~删除~~`、嵌套列表、`\(...\)`、h5/h6，以及"汉字开头、ASCII 结尾"的混排强调（把收尾标点写进粗体里就生效）。边界由 smoke 场景 9 逐条钉住。
 
 ## 配置与密钥
 
-真实密钥不进仓库，也不放 `*.example` 模板。
+真实密钥不进仓库。**key 是文本解析 `~/.bashrc` 拿的**（服务由 systemd 启动，继承不到终端环境），而且**每轮重读** —— 换了 key 下一轮就生效，不用重启；`CHAT_STORAGE` / `CHAT_WORKSPACE` 由 `chat.service` 的 `Environment=` 给（运行时数据位置 / 默认工作区根）。
 
-| 变量 | 真实文件 | 谁在读 |
-|---|---|---|
-| `GPT_API_KEY` / `DEEPSEEK_API_KEY` / `LOCAL_QWEN_API_KEY` | `~/.bashrc` | `runtime.ensure_runtime_env()`（web 与 CLI 共用）|
-| `CHAT_STORAGE` / `CHAT_WORKSPACE` | `chat.service` 的 `Environment=` | 运行时数据位置 / 默认工作区根 |
-| `LOCAL_QWEN_MODEL_DIR` / `LOCAL_QWEN_MODEL_NAME` | 可选覆盖 | 只管启动 vLLM 服务，chat 不读 |
-
-- **key 是文本解析 `~/.bashrc` 拿的**，不是读环境变量 —— 服务由 systemd 启动，继承不到终端环境。
-- **每轮都重读**：在 bashrc 里换了 key，**下一轮就生效，不用重启**。优先级：启动时已存在的环境变量 > `~/.bashrc`；文件读不到时**不动**已有的值。
-- **`providers.yaml` 是 `base_url` 的唯一来源**；local_qwen 的 `api_key_default` 是占位不是密钥。
-- **`prompts.yaml` 是系统提示词的唯一来源**，每次请求重读 —— 改完**不用重启**。已说过话的会话用**落盘在 `turn` 里的那份**，所以要新会话才吃到改动。
+**`providers.yaml` 是 `base_url` 的唯一来源**；**`prompts.yaml` 是系统提示词的唯一来源**，每次请求重读（改完不用重启；但已说过话的会话用落盘的那份，所以要新会话才吃到）。
 
 ## 运行说明
 
-- 对话记录在**服务端**：一场一个 append-only JSONL，历史靠重放。删掉文件就是永久删除。
-- **没说过话就没有会话文件**：会话 id 由客户端生成，文件只在第一轮写日志时创建。
-- **工作区决定 agent 在哪干活**：相对路径按它解析、`run_bash` 的 `cwd` 是它。第一轮绑定，之后不许改。
-- **系统提示词跟着会话走**：服务端只在它**变化**的那一轮记进日志，读回来靠回溯。
+- 对话记录在**服务端**：一场一个 append-only JSONL，历史靠重放，删文件就是永久删除；**没说过话就没有会话文件**（id 由客户端生成）。**工作区**决定 agent 在哪干活（相对路径、`run_bash` 的 `cwd`），第一轮绑定、之后不许改。
 - **进度实时可见**：每条记录一产生就落盘，前端在轮次进行中轮询 `GET /api/sessions/{id}`。
-- **可以中途停止**：`POST /api/sessions/{id}/interrupt`，取消是**协作式**的（只在两个步边界检查），界面显示"正在停止…"直到真正收尾。
-- 默认 `deepseek` / `deepseek-flash`，改 `runtime.py` 那两个常量即可。
-
-### 先读后改守卫（observed）
-
-**没读过的文件不许改**（硬拦）；**读过之后被外部改过，先拦一次并说明变了多少**（只提醒一次 —— 守卫说不出"哪里变了"，所以把判断交还模型）。
-
-- 按 context 隔离，**没有默认 context**，id 由宿主注入（模型塞不进来）：web/CLI 是 `session:<id>`，评估是 `eval:<case>-<时间戳>-<第几次>`。
-- **进程内存**，TTL 6 小时，只管"这场会话多久没人用"，**不做陈旧判断**（那是 version 比较的事）。丢掉只会"多拦一次"，不会放行错误写入。
-- 从没被读过的文件不存在，所以建新文件不受影响。
-
-### 会话日志格式
+- **可以中途停止**：`POST /api/sessions/{id}/interrupt`。跑着时是**协作式**取消（步边界检查）；**停在审批上时立即生效**，含义是"放弃这一轮"。
+- **先读后改守卫**：没读过的文件不许改（硬拦）；读过之后被外部改过先拦一次。按 context 隔离（id 由宿主注入），进程内存、TTL 6 小时，丢掉只会"多拦一次"。
+- 默认 `deepseek` / `deepseek-flash`（改 `runtime.py` 那两个常量）。
 
 ```
-{"type":"session","version":1,"id":…,"createdAt":…,"workspaceId":…}      首行，只写一次
-{"type":"turn","time":…,"provider":…,"model":…,"toolsEnabled":…,
-                 "sandboxMode":…}                                       一轮开始（跑之前）
-{"type":"user","content":…}
-{"type":"assistant","content":…,"tool_calls":[…]}                       收到模型回复即落盘
-{"type":"tool","tool_call_id":…,"content":…}                            每个工具跑完即落盘
-{"type":"plan","time":…,"todos":[…]}                                    `plan` 工具写入的当前任务清单
-{"type":"bash-result","requestId":…,"status":…,"content":…}             审批后追加
-{"type":"turn-end","time":…,"durationMs":…,"temperature":…,"error":…}   收尾
+{"type":"session",…,"workspaceId":…}      首行，只写一次
+{"type":"turn",…,"model":…,"toolsEnabled":…,"sandboxMode":…,"systemPrompt":…}   一轮开始（跑之前）
+{"type":"sandbox",…,"mode":…}             人拨了沙箱开关（log-only）
+{"type":"user"|"assistant"|"tool",…}      对话与工具，边跑边落盘（assistant 带 tool_calls / reasoning_content）
+{"type":"plan","todos":[…]} · {"type":"turn-end",…,"durationMs":…,"error":…}   计划快照 · 收尾（**停住等审批时不写**）
 ```
 
-- **`systemPrompt` / `sandboxMode`** 在 `turn` 里；`systemPrompt` 只在**变化**的那轮出现。
-- 历史重放 = `user`/`assistant`/`tool` 按序取出。**已批准的 bash 请求在重放时会被换成真实执行结果**，模型恢复时看到的是输出而不是请求卡片。
-- 没有产出的那一轮，它的 `user` 不进历史 —— 失败/中断后重试不会把同一句话追加两遍。
-- `repair_orphans` 给"声明了 `tool_calls` 但没结果"的洞补合成结果，会话不会废掉。
-
-## 安全边界
-
-**只在局域网可达，因此没有密码。** 应用层不做鉴权。
-
-- `workspace-write` 限制的是**文件工具**；bash 是"停住让人批一次"的放行闸门，不是牢笼（见「沙箱与审批」那段引用块）。
-- 批准后命令以 **full-access** 执行，审计只记命令字符串与输出，**没有进程树、文件改动、网络记录**。
-- 所以对外暴露前必须先加鉴权，并且把 OS 级隔离做出来（bwrap/Landlock/容器），而不是只靠审批。
+审批的结果走 `{"type":"bash-result","requestId":…,"status":…,"content":…}`（批准 / 拒绝 / 放弃）。`systemPrompt` 只在**变化**的那轮出现；**当前模式 = 最后一条 `sandbox` 事件**。**`reasoning_content`**（thinking 模式的思维链）**必须原样回传**，否则下一次请求整个 400 —— 所以它跟着 assistant 一起落盘、一起重放。历史重放 = `user`/`assistant`/`tool` 按序取出，**已批准的 bash 请求会被换成真实执行结果**；`repair_orphans` 补"声明了 `tool_calls` 但没结果"的洞。
 
 ## 验证
 
 ```bash
 python packages/chat/check_api.py          # 后端：路由不 5xx + 契约比对 + 语义断言
-python packages/chat/check_observed.py     # 守卫：按 context 隔离 + 硬拦 + TTL，不花钱
-python packages/chat/demo_agent_loop.py    # agent 闭环保真：假 client + 真工具，不花钱
-cd packages/frontend && pnpm run check      # 前端：构建 + jsdom 冒烟（13 个场景）
-python evals/agent/run.py --runs 2          # 评估：agent 做对没有
+python packages/chat/check_observed.py · demo_agent_loop.py   # 守卫隔离/TTL · agent 闭环（都不花钱）
+cd packages/frontend && pnpm run check      # 前端：构建 + jsdom 冒烟（14 个场景）
+python evals/agent/run.py --runs 2          # 评估：agent 做对没有（会花钱）
 ```
 
-四条覆盖不同的层，**谁也不能替谁**：`smoke` 把 `fetch` 全 stub 掉，后端接口 500 它照样全绿；`check_api` 只验后端；`check_observed` 只验守卫；`evals` 只验 agent 做完没有。
+四条覆盖不同的层、**谁也不能替谁**（smoke 把 `fetch` 全 stub 掉，后端 500 它照样全绿）。
 
-### 后端契约
+**后端契约**：`backend-contract.json` 进 git、两侧都对着它断言（由 `check_api.py --update` 从真实后端采出）—— 后端改字段 → check_api 红 → `--update` → smoke 发现 stub 过时；里面的 `enums.item_kind` 是前端那张 `kind → 渲染` 表必须覆盖的取值域（认不出的在界面上明说「未知条目」）。
 
-前后端之间那条边界**必须有测试**，所以 `backend-contract.json` 进 git，两侧都对着它断言：
-
-```
-backend-contract.json     ← 由 check_api.py --update 从真实后端采出
-      ↑ 断言                    ↑ 断言
-check_api.py（调接口比形状）   frontend/smoke.mjs（比自己的 stub）
-```
-
-后端改字段 → `check_api` 红 → 跑 `--update` → 前端 smoke 立刻发现 stub 过时。契约里还有 `enums.item_kind`（`user`/`step`/`running`/`assistant`/`bash-request`）：前端那张 `kind → 渲染` 表必须覆盖它，认不出的 kind 在界面上明说「未知条目」。
-
-### 评估
-
-判据是**世界变成什么样**，不是回复像不像。一个 case = `task.txt` + `fixture/` + `check.sh`（临时目录里跑，退出码 0 才算过）。走**服务端同一条路径**，只把根目录换成临时目录。两条护栏：`protected.txt` 哈希不许变；跑前跑后仓库 `git status --short` 必须一样。
-
-```bash
-python evals/agent/run.py -k rename    # 名字含 rename 的
-python evals/agent/run.py --runs 3     # 每 case 三次
-python evals/agent/run.py -m gpt-5.5   # 换模型
-```
-
-当前基线（2026-09-16，`deepseek-flash`，每 case 2 次）：`fix-until-green` ✅✅、`rename-across-files` ✅✅。只有 2 个 case、都简单 —— 这些数字是**回归信号**，不是分数。
+**评估**：判据是**世界变成什么样**，不是回复像不像。一个 case = `task.txt` + `fixture/` + `check.sh`（临时目录里跑，退出码 0 算过），走服务端同一条路径、只换根目录；护栏是 `protected.txt` 哈希不许变、跑前跑后 `git status --short` 必须一样。基线（`deepseek-flash`）：两个 case 都 ✅✅ —— 回归信号，不是分数。
 
 ## 要做什么
 
-**推荐顺序：0 → 3**（评估超时 → VRMA 应用），其余按需。
+**顺序：0 → 3**，其余按需。
 
-**0. 评估的 agent 侧超时（10 分钟，前置于一切"换模型/加能力"的实验）**
-`loop.py` 没有轮数上限，而评估里的 agent 循环**没有超时**（只有 `check.sh` 有 300s）。本地小模型陷入工具循环时会把评估挂死 —— 现在只能靠外层 `timeout` 兜。这条不补，后面任何"换个模型试试"都不可靠。
+**0. 评估的 agent 侧超时**（前置于一切"换模型/加能力"的实验）：`loop.py` 没有轮数上限，评估里的 agent 循环也没有超时（只有 `check.sh` 有 300s）—— 小模型陷入工具循环会把评估挂死。
 
-**1. planning + 可见 UI —— 已完成**
-新增 `plan` 工具：模型用 `{todos:[{content,status}]}` 创建或更新当前任务清单；计划写进日志（`type:"plan"`），前端在输入区上方以可折叠清单显示，只展示当前 turn 的计划。工具描述里说明"长任务才用"，系统提示词只轻量列出这个工具。
-
-**2. 沙箱 + 危险命令审批 —— 已完成**
-两档模式、文件围栏、bash 一次性审批 + 恢复回路、审计日志都已落地（见「沙箱与审批」）。
-**剩余**：bash **没有 OS 级隔离** —— 批准后以 full-access 跑，内部调用链不展开。要做真隔离得接 `bwrap`/Landlock，这是另一个工程量级；另外 CLI 还缺交互式审批入口。
-
-**3. 应用：离线生成 VRMA 动作**（最终目标，见下一节）
-
-之后按需，互不前置：
-
-| # | 事 | 要点 |
-|---|---|---|
-| 4 | token / 成本账 | `openai_client` 从没读过 `response.usage`，扇出和"最少 token"都没法量。落进 turn 记录即可。 |
-| 5 | 工具注册表单一来源 | schema 在 `tools.py`、散文在 `prompts.yaml` —— 加工具要改两处，且不会报错。 |
-| 6 | 上下文压缩 | `loop.py` 没有轮数上限，压缩从"可选优化"变成"放开上限的必要配套"。 |
-| 7 | 并行工具调用 | 现在一批是串行的。加池前先定：哪些可并行（`run_bash` 必须独占）、结果按模型给的顺序落盘、并发时的 observed 干扰。 |
-| 8 | search | 走 API，不用本地 2B。 |
+1 planning + 可见 UI（已完成）、2 沙箱 + 审批（已完成；缺 OS 级隔离与 CLI 审批入口）、**3 离线生成 VRMA 动作**（下一节）。之后按需：4 token/成本账（`response.usage` 从没读过）· 5 工具注册表单一来源（schema 与散文在两处）· 6 上下文压缩（循环无轮数上限，压缩成了必要配套）· 7 并行工具调用（先定谁可并行，`run_bash` 必须独占）· 8 search（走 API，不用本地 2B）。
 
 ## 应用：离线生成 VRMA 动作
 
-**目标**：动作**离线生成**（慢慢试错无所谓），直播只负责**回放**生成好的 `.vrma` —— 这个形状把延迟从致命变成无关。
-
-**任务有多大**：一个 `.vrma` 是 52 根 humanoid 骨、91 条通道、60fps、11.8 秒、**6.4 万个浮点数**。这不是语言模型的输出空间（旋转还是四元数），所以分三层：
+**目标**：动作**离线生成**（慢慢试错无所谓），直播只**回放**生成好的 `.vrma` —— 延迟因此从致命变成无关。一个 `.vrma` 是 52 根骨、91 条通道、11.8 秒、**6.4 万个浮点数**，不是语言模型的输出空间，所以分三层：
 
 ```
-① 意图（LLM）      "挥手打招呼，再鞠躬"        ← 文本
-      ↓ 工具调用
-② 火柴人（确定性） 22 个关节的**位置**序列      ← 数字，程序算
-      ↓ 插值 + aim/IK + retarget
-③ VRMA（确定性）   相对标准 rest pose 的局部旋转 → 写文件
-      ↓
- 校验（规则）→ **文字**问题清单 → 回喂 ①  ↺
+① 意图（LLM）"挥手打招呼，再鞠躬" → ② 火柴人：22 个关节的**位置**序列（程序算）→ ③ 插值 + aim/IK + retarget
+   ↑ 校验（规则）→ 文字问题清单 ↺                                          → 相对 rest pose 的旋转 → 写 .vrma
 ```
 
-**为什么中间必须有「火柴人」**：`humanBones` 本身就是**名字 → 节点号**的标准表，让火柴人用同一套名字，映射就是查表；52 根里 30 根是手指，非手指的 **22 根**正好是标准火柴人（v1 砍掉手指和表情）；**存位置而不是旋转** —— 位置可直接插值/镜像/重定向，且"脚踩地"在位置空间就是 `foot.y ≈ 0`，旋转空间得先跑 FK；采样降到 10~15fps 后序列从 6.4 万降到**千级**，60fps 由插值还原。`.vrma` 与模型无关（存的是相对标准 rest 坐标系的旋转）。
+中间必须是火柴人：`humanBones` 本身就是"名字 → 节点号"的标准表，22 根非手指骨正好是标准火柴人；**存位置而不是旋转**（可直接插值/镜像/重定向，"脚踩地"就是 `foot.y ≈ 0`）。校验先用规则（脚打滑 / 穿地失衡 / 关节限位 / 自穿模 / 瞬移），"看着别扭"那类再留给对抗网络。
 
-**校验先用规则**（离线可以慢慢查，输出还是文字）：脚打滑 / 穿地失衡 / 关节限位 / 自穿模 / 瞬移。对抗网络留给"看着别扭"那类说不清的问题。
-
-**已有数据可先自证**：`/home/zhong/mydisk/shared/vrma/` 有 7 个真动作，全转成火柴人再转回去比对四元数误差 —— 两个方向一次都验了。
-
-**落到本仓库**：新增工具（`list_motions` / `sample_motion` / `blend` / `verify_motion`）+ 一个动作 case（`task.txt` 是一句动作描述，`check.sh` 跑 `verify_motion.py`），于是"哪个模型够用"（2B / 8B / 13B）有了数字而不是猜。
+**落到本仓库**：新增工具（`list_motions` / `sample_motion` / `blend` / `verify_motion`）+ 一个动作 case，于是"哪个模型够用"（2B / 8B / 13B）有数字而不是猜；已有 7 个真动作在 `/home/zhong/mydisk/shared/vrma/`，可先拿它们自证。
 
 ## 已知的小问题
 
 | 问题 | 说明 |
 |---|---|
-| 审批不展开调用链 | 批准 `bash a` 不展开 `a` 内部的 `b`/`c`/`d`；审计也没有进程树。见「安全边界」。|
-| 审批后命令以 full-access 跑 | 所以 `workspace-write` 的文件限制**不覆盖 bash**。|
-| CLI 无审批入口 | `workspace-write` 下 bash 在 CLI 里只能靠 HTTP 端点批准。|
-| 中断的轮次 `temperature` 是 `null` | 取消时调用方拿不到 `TurnResult`（提示词不受影响）。|
-| `bash-audit.jsonl` 无轮转 | append-only，删除会话不清理它，会一直增长。|
-| 契约只钉形状、不钉值域 | 除 `item_kind` 外的枚举靠 pydantic 的 `Literal` 保证。|
-| 停止按钮这条交互没有测试 | `smoke.mjs` 覆盖渲染与复制按钮的点击，不覆盖停止按钮。|
-| key 轮换没有回归测试 | "重读 bashrc 免重启"只靠人验过。|
-| bashrc 里删掉 key 不会让进程忘掉它 | 只做"读到就更新"，彻底移除仍需重启。|
-| 变更提醒"只一次"意味着重试可以绕过重读 | 刻意的"告知而非禁止"，代价是第二次试就能过。|
-| observed 不跨进程共享 | 网页与 CLI 各有一份。|
-| 陈旧保护是 check-then-write，不是 CAS | 中间有窗口，而 `run_bash` 能挤进去。|
-| provider 对消息形状的容忍度不同 | 严格的 chat 模板（vLLM 上的 Qwen）会拒收中途出现的第二条 system 消息，云端 API 照收。所以"消息形状"这类错**只在本地模型上暴露**，还得靠人想起来去本地模型上试一遍。|
+| 审批不展开调用链 · 批准后以 full-access 跑 | 批准 `bash a` 不展开内部的 `b`/`c`/`d`（审计无进程树）；所以 `workspace-write` 的文件限制**不覆盖 bash**。|
+| CLI 无审批入口 · provider 容忍度不同 | `workspace-write` 下 bash 在 CLI 里只能靠 HTTP 端点批准；严格模板（vLLM 的 Qwen）拒收中途出现的第二条 system 消息、云端 API 照收 —— 这类错**只在本地模型上暴露**。|
+| thinking 模式必须回传思维链 · 暂停时的回执 | `reasoning_content` 不回传 → 下一次请求 400（已修）；暂停时 `/api/chat` 回执仍是 `state:"ok"` —— 判断"这一轮还没结束"要看 `running`。|
+| 其它零碎 | 审计无轮转；中断轮次 `temperature` 是 null；key 轮换没有回归测试；bashrc 删 key 不会让进程忘掉；observed 不跨进程共享；陈旧保护是 check-then-write；契约只钉形状不钉值域；权限变更通知罕见说两遍；Composer 里的停止按钮没有测试。|

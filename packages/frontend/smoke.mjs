@@ -279,13 +279,16 @@ console.log("\n[0. 契约：本文件的 stub 响应体 vs 后端形状契约]")
   // GET /api/sessions/{id}）。成功和中止两种 state 都要对得上契约。
   report.push(...checkAgainstContract("POST /api/chat", { state: "ok", toolsLocked: true }));
   report.push(...checkAgainstContract("POST /api/chat", { state: "interrupted", toolsLocked: true }));
-  report.push(...checkAgainstContract("POST /api/sessions/{id}/bash-requests/{requestId}/approve", { status: "executed", content: "ok", reply: "执行成功" }));
-  report.push(...checkAgainstContract("POST /api/sessions/{id}/bash-requests/{requestId}/reject", { status: "rejected", content: "no", reply: "好的" }));
+  report.push(...checkAgainstContract("POST /api/sessions/{id}/bash-requests/{requestId}/approve", { status: "executed", content: "ok", reply: "执行成功", resumed: true }));
+  report.push(...checkAgainstContract("POST /api/sessions/{id}/bash-requests/{requestId}/reject", { status: "rejected", content: "no", reply: "好的", resumed: true }));
   // POST /api/sessions/{id}/interrupt 的 stub
   report.push(...checkAgainstContract("POST /api/sessions/{id}/interrupt", { interrupted: true }));
+  // POST /api/sessions/{id}/sandbox 的 stub（拨开关立刻上报，见场景 14）
+  report.push(...checkAgainstContract("POST /api/sessions/{id}/sandbox",
+    { sandboxMode: "full-access", recorded: true }));
 
   if (report.length === 0) {
-    console.log("  ✅ 7 个接口的 stub 形状都和契约一致");
+    console.log("  ✅ 8 个接口的 stub 形状都和契约一致");
   } else {
     for (const line of report.slice(0, 8)) console.log(`  ❌ ${line}`);
     if (report.length > 8) console.log(`  ❌ …另有 ${report.length - 8} 处`);
@@ -450,6 +453,16 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
     check("审批面板显示要执行的命令", text.includes("printf hi"));
     check("审批期间发送按钮让位给面板",
           !window.document.querySelector("button[type=submit]"));
+    // 面板占着输入端，Composer 连同它的停止按钮一起从 DOM 里消失了 —— 所以**面板上必须
+    // 有能停的地方**（以前没有：暂停期间服务端也没有可停的东西，/interrupt 恒 false）。
+    const stopButton = [...window.document.querySelectorAll(".bash-approval-actions button")]
+      .find((el) => el.textContent.includes("停止这一轮"));
+    check("审批面板上有「停止这一轮」", !!stopButton);
+    stopButton?.click();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    check("点它真的发了 /interrupt（暂停期间唯一的停止入口）",
+          fetchCalls.some((url) => url.includes("/interrupt")),
+          `实得 ${JSON.stringify(fetchCalls.filter((u) => u.includes("/interrupt")))}`);
     check("对话流里没有 Bash 请求卡片", !text.includes("Bash 请求"));
   } else {
     check("输入框存在", !!window.document.querySelector("textarea, input[type=text]"));
@@ -1330,9 +1343,56 @@ copyCheck("整轮里正好一个复制按钮（不会被审批断成两段）",
           approvalDone2.document.querySelectorAll(".chat-box .message-action").length === 2,
           `实得 ${approvalDone2.document.querySelectorAll(".chat-box .message-action").length}（1 个 user + 1 个助手轮末）`);
 
+// —— 拨沙箱开关：必须**立刻上报服务端**，不能只留在本地草稿 ——
+//
+// 守的是一个真实踩过的 bug：handleSandboxChange 原先只有 setState + 写 localStorage，
+// **不发任何请求**。而模式进服务端的唯一通道是下一轮 /api/chat 的 payload —— 于是
+// "一轮中途改模式"根本没有出口，可那一刻恰恰最需要它：审批面板横在输入端、模型停着
+// 等你回答。服务端那边恢复的循环读的又是"这一轮开始时"的 turn 快照，合起来就是
+// "改成 full-access 也没用，还是一直要审批"。
+//
+// 现在拨开关会 POST /api/sessions/{id}/sandbox，服务端把它记成一条日志事件，执行侧
+// 每次操作边界折一遍日志 —— 下一条工具调用就按新模式走。
+const sandboxScene = await scenario("14. 拨沙箱开关：立刻上报（不再只写本地草稿）", {
+  seedSession: "web-sandbox-switch",
+  sessionItems: {
+    id: "web-sandbox-switch", workspaceId: "ws-bc8da407",
+    settings: { toolsEnabled: true, sandboxMode: "workspace-write" },
+    toolsLocked: true, running: false,
+    items: [
+      { kind: "user", content: "看看工作区" },
+      { kind: "assistant", content: "好" },
+    ],
+  },
+  expectTools: true, expectLocked: true,
+});
+const sandboxSelect = sandboxScene.document.querySelector(".tool-toggle select");
+copyCheck("沙箱下拉框在、且没在跑时可以拨",
+          !!sandboxSelect && sandboxSelect.disabled === false,
+          `disabled=${sandboxSelect?.disabled}`);
+sandboxSelect.value = "full-access";
+sandboxSelect.dispatchEvent(
+  new sandboxScene.document.defaultView.Event("change", { bubbles: true }));
+await new Promise((resolve) => setTimeout(resolve, 40));
+const sandboxCalls = sandboxScene.fetchCalls.filter((url) => url.includes("/sandbox"));
+// 打的是**界面上此刻这一场**（shared 场景体先前已经点过"新对话"/删过对话，
+// 所以不能拿 seedSession 那个 id 来断言 —— 那是脚手架的历史，不是界面的现状）。
+// 前端自己把当前会话 id 写在 chat.sessionId 里，两者必须一致。
+const currentSessionId =
+  sandboxScene.document.defaultView.localStorage.getItem("chat.sessionId");
+copyCheck("拨开关发了 POST /sandbox，且打的是当前这场会话",
+          sandboxCalls.length === 1
+          && sandboxCalls[0] === `/api/sessions/${currentSessionId}/sandbox`,
+          `实得 ${JSON.stringify(sandboxCalls)}，当前会话 ${JSON.stringify(currentSessionId)}`);
+copyCheck("选择也留在本地草稿里（刷新后不至于倒回旧值）",
+          sandboxScene.document.defaultView.localStorage
+            .getItem("chat.sandboxModeDraft") === "full-access",
+          `实得 ${JSON.stringify(sandboxScene.document.defaultView.localStorage
+            .getItem("chat.sandboxModeDraft"))}`);
+
 console.log();
 if (failures) {
   console.log(`失败 ${failures} 项`);
   process.exit(1);
 }
-console.log("UI 冒烟测试通过（13 个场景）");
+console.log("UI 冒烟测试通过（14 个场景）");

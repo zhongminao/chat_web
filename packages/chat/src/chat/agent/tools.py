@@ -5,6 +5,7 @@ import signal
 import subprocess
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 from chat.agent import bash_audit
@@ -192,9 +193,9 @@ RUN_BASH_SCHEMA = {
         "name": "run_bash",
         "description": (
             "Run a bash command and return combined stdout/stderr. "
-            "In full-access mode the command runs immediately. In workspace-write mode it "
-            "creates a one-time approval request for this exact command and pauses; approval "
-            "runs only this command and does not switch the session to full-access. "
+            "A command may come back as a one-time approval request instead of output; then "
+            "the turn waits for the user to answer, and that answer covers this exact command "
+            "only. When that happens, do not retry the command and do not claim it ran. "
             "Use for listing files, searching (grep), git, or running programs. "
             "Output that is too long is elided in the middle — you get the "
             "beginning and the end — but it is never lost: the full text is saved "
@@ -661,7 +662,7 @@ def execute_tool(name: str, arguments_raw: str, *, root: "str | Path | None" = N
 
 
 def make_executor(root: "str | Path | None", observed: ObservationContext, *,
-                  should_stop=None, sandbox_mode: str | None = DEFAULT_SANDBOX_MODE,
+                  should_stop=None, sandbox_mode: "str | Callable[[], str] | None" = DEFAULT_SANDBOX_MODE,
                   audit_root: "str | Path | None" = None,
                   audit_session_id: str | None = None):
     """把宿主的东西绑进一个 (name, arguments_raw) -> str 的回调，交给 run_agent_turn。
@@ -673,18 +674,27 @@ def make_executor(root: "str | Path | None", observed: ObservationContext, *,
     should_stop 一路传到 run_bash —— 没有它，用户点停止之后一条正在跑的 `sleep 200`
     只能等它自己结束（界面上看起来就是"没反应"）。
 
+    sandbox_mode 可以是字符串，也可以是**零参回调**。服务端传回调：每次工具调用现折一遍
+    会话日志（session_store.sandbox_mode_of），于是人拨了开关之后**下一条工具调用**就
+    按新模式走 —— 不必等下一轮、也不必等某次审批被点。CLI/评估传字符串（它们的模式是
+    一次运行的参数，本来就不变）。
+
+    回调在这里解析成字符串：execute_tool 的契约、四个工具的签名、_INJECTED_ARGS 白名单
+    因此一行都不用改（模式**永远**由宿主决定，模型塞 sandbox_mode 进参数照样被过滤）。
+
     observed **必填**：不传就等于"没有上下文"，那正好是以前跨会话串味的老路。
     没有会话身份的调用方用 observed.REGISTRY.new_context() 开一个一次性的，
     不要退回某张共享表。
     """
     def _executor(name: str, arguments_raw: str) -> str:
+        mode = sandbox_mode() if callable(sandbox_mode) else sandbox_mode
         return execute_tool(
             name,
             arguments_raw,
             root=root,
             should_stop=should_stop,
             observed=observed,
-            sandbox_mode=sandbox_mode,
+            sandbox_mode=mode,
             audit_root=audit_root,
             audit_session_id=audit_session_id,
         )

@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -26,6 +27,7 @@ from pydantic import BaseModel, Field
 
 from chat import create_client, get_model_temperature
 from chat.agent import make_executor, run_agent_turn, session_store, workspace_store
+from chat.agent.cancel import REGISTRY, TurnCancelled
 from chat.agent import observed as observed_store
 from chat.agent.sandbox import DEFAULT_SANDBOX_MODE, normalize_mode
 
@@ -283,6 +285,9 @@ class ChatMessage(BaseModel):
     content: str = ""                  # assistant(tool_calls) 消息可能无正文，允许空
     tool_calls: list | None = None     # 协议回放：assistant 声明的工具调用列表
     tool_call_id: str | None = None    # 协议回放：tool 结果消息配对用
+    # thinking 模式的思维链。**必须原样回传**：DeepSeek 在下一次请求里要求带上它，
+    # 少了就整个请求 400（见 openai_client._reasoning_content_of）。
+    reasoning_content: str | None = None
 
 
 def normalize_messages(
@@ -318,6 +323,9 @@ def normalize_messages(
             entry["tool_calls"] = message.tool_calls
         if message.tool_call_id:
             entry["tool_call_id"] = message.tool_call_id
+        # 思维链跟着 assistant 一起回传（别的供应商不会给这个字段，所以只有拿到过才有）。
+        if message.reasoning_content:
+            entry["reasoning_content"] = message.reasoning_content
         normalized_messages.append(entry)
     return normalized_messages
 
@@ -388,6 +396,104 @@ class TurnRequest:
     temperature: float | None = None
 
 
+# ---------------------------------------------------------------------------
+# 沙箱策略：此刻是什么，以及怎么让模型知道
+# ---------------------------------------------------------------------------
+#
+# 这一段的形状全部对着 DSH 抄（packages/sandbox/sandbox-policy 与
+# packages/core/agent-loop/src/runtime-context.ts），因为那边已经把这件事想清楚了：
+#
+#   1. **真相在日志里**：开关是一次事件（session_store 的 `sandbox` 记录），当前值 =
+#      按位置折出来的最后一条。`turn` 记录里那份降级为历史，任何决策都不许只读它。
+#   2. **执行侧在每次操作边界折一遍**：模式随时可改（包括一轮中途），冻结在闭包里的
+#      字符串必然过期。
+#   3. **模型只在"权限变了"的时候被告知一句**（事件式的通知），**不是**常驻一句"现在是
+#      什么"。为什么这样更干净：模型不需要靠提示词知道自己的权限 —— 它靠工具返回学
+#      （bash 的审批请求自带"没执行、别重试"；文件围栏拒绝时自带原因和路径）。而一句
+#      常驻的状态必须**每个请求重新注入**（历史是重建的，上次那条不在里面），于是每轮
+#      白付一次 token，且它随时可能过期 —— 正是早先那个 bug 的形状。
+#
+# DSH 在这一点上不同：它**每次请求都渲染**当前策略（renderPolicyContext / ASK_SENTENCE），
+# 但 `project()` 只在值变化时才产生那条消息，而且把消息**存进会话历史**（surface event），
+# 所以下次请求靠重放就带着它、不必重发。它不重复付 token，靠的是"存了"。
+#
+# chat 这里的选择是：不存，也不常驻；只在变化的那一刻说一句。那一句是
+# `(上一轮记录的模式, 折出来的此刻值)` 的纯函数 —— 两个输入都已经在日志里，所以
+# **文本不必落盘**（这也正是"派生内容不存第二遍"那条规矩要我们做的）。
+#
+# 想从一份请求的 messages 里认出它，用 is_runtime_notice()。
+RUNTIME_NOTICE_PREFIX = "The sandbox policy changed "
+
+
+def session_sandbox_mode(session_id: str, fallback: str | None = None) -> str:
+    """这场会话**此刻**的沙箱模式。
+
+    日志里折出来的值优先 —— 因为模式随时可改，人可以改在两轮之间，也可以改在一轮
+    **中途**（审批面板正横在那儿的时候）。turn 记录里那个值只是"这一轮开始时是什么"，
+    拿它当"现在"正是以前那个死循环的形状：workspace-write 下每次 run_bash 都要一次审批
+    → 人改成 full-access → 恢复的循环读旧快照 → 又要一次审批，改多少次都没用。
+
+    折不出值时才用 fallback（新会话 / 更早的日志里没记过 / 没说过话）：
+    web 是这一轮 payload 带上的草稿，CLI 是 --sandbox 参数。
+    """
+    return normalize_mode(
+        session_store.sandbox_mode_of(SESSION_DIR, session_id)
+        or fallback
+        or DEFAULT_SANDBOX_MODE)
+
+
+def policy_change_note(previous: str, current: str) -> str:
+    """把"权限刚被改了"写成一句事件说明（照 DSH 的措辞：changed from X to Y）。
+
+    只讲**发生了什么**：不说"现在是什么"，更不说"接下来一定会怎样"。前者需要每个请求
+    重新注入（历史重建后上次那条不在里面 → 每轮白付 token），后者在模式再变时变成假话。
+    一句"从 X 改成 Y（人改的）"是**恒真的历史事件**，说过一次就够，重放时也不会过期。
+
+    不教它怎么绕过策略：被拦下时工具自己会给原因和路径，照工具返回的走就行。
+    """
+    return (f'{RUNTIME_NOTICE_PREFIX}from "{normalize_mode(previous)}" '
+            f'to "{normalize_mode(current)}" (changed by the user).')
+
+
+def is_runtime_notice(message: dict) -> bool:
+    """这条消息是不是我们**注入**的运行时说明（不是用户打的字）。
+
+    存在的理由很实际：这种通知进的是发给模型的消息列表，而它**没有**任何额外字段 ——
+    加字段（比如 source / meta）会被严格的服务端拒收，所以只能在文本层面认它。于是把
+    "怎么认"收成一处：任何要统计/过滤/压缩消息的地方都调这个，别各自 startsWith 一遍。
+
+    （DSH 那边不需要这个函数：它的注入消息带 `source: {kind:'plugin', plugin, form}`，
+    别的包按 plugin 名过滤，见 packages/core/agent-loop/src/runtime-context.ts。
+    chat 的消息模型里没有 source 这个位置，索引不进 API 请求，所以只能这样。）
+    """
+    return (str(message.get("role") or "") == "user"
+            and str(message.get("content") or "").startswith(RUNTIME_NOTICE_PREFIX))
+
+
+def project_policy_change(history: list[dict], current: str, baseline: str,
+                          applied: list) -> list[dict]:
+    """模式变了才往消息末尾追加一句通知；没变就什么都不做（一个 token 都不花）。
+
+    比较基准是**上一次告诉过模型的值**（applied[0]，还没有过就用 baseline）：
+      - `baseline` = 这次请求开始时"模型以为的"模式。web 的新一轮取**上一轮记录的模式**
+        （所以"两轮之间改了开关"能在下一轮第一步被说出来），恢复取本轮记录的模式；
+      - 说过一次之后 `applied[0]` 就是新值，所以同一句话不会每步重复塞（前缀缓存也保住了）。
+
+    为什么追加在末尾、而不是改写开头那条 system：系统提示词是稳定前缀，每步重写它会把
+    模型侧的前缀缓存整段打掉；而且 system_prompt="" 的会话也照样能被通知到。
+
+    **不落盘**：它是 `(baseline, 折出来的值)` 的纯函数，两个输入都已经在日志里
+    （`turn.sandboxMode` + `sandbox` 事件），存下来就是同一份信息存两遍。
+    它也**不进模型历史**（`load_history` 只认 user/assistant/tool）—— 这条通知只属于
+    "发出它的那一次请求"，重放不该把它当成历史里的一句话。
+    """
+    announced = applied[0]
+    if current == (announced if announced is not None else baseline):
+        return history
+    applied[0] = current
+    return [*history, {"role": "user", "content": policy_change_note(announced or baseline, current)}]
+
+
 def request_real_reply(
     request: TurnRequest,
     prior_messages: list[ChatMessage],
@@ -395,9 +501,19 @@ def request_real_reply(
     *,
     writer: Any = None,
     should_stop: Any = None,
+    sandbox_mode: "str | Callable[[], str] | None" = None,
+    sandbox_baseline: str | None = None,
     observed_context_id: str,
     ) -> TurnResult:
     """observed_context_id: 这一轮的观测状态属于哪个上下文（**必填**）。
+
+    sandbox_mode: 执行时用的模式，**字符串或零参回调**；None → 用 request 里那个值。
+    web 传回调（每次工具调用现折一遍会话日志：人拨了开关之后，**下一条工具调用**就按
+    新的走 —— 不必等下一轮、也不必等某次审批被点）；CLI 不传（它的模式是一次运行的
+    参数，本来就不变）。
+    sandbox_baseline: "模型以为现在是哪个模式" —— 变了才据此给一句通知（见
+    project_policy_change）。web 的新一轮取**上一轮记录的模式**；不传 = 与当前相同 =
+    一句都不说（CLI 就是这种：没有界面可以拨开关）。
 
     没有默认值，也不退回任何共享表 —— 那正是以前"先读后改"跨会话失效的原因：
     A 场读过的文件，B 场能直接改（实测过）。调用方必须表态：
@@ -429,10 +545,18 @@ def request_real_reply(
         request.system_prompt,
         tools_enabled=request.tools_enabled,
     )
-    sandbox_mode = normalize_mode(request.sandbox_mode)
+    # 模式**每次操作边界现算**（见上面的三段说明）。字符串进来就包成常量回调 —— 后面
+    # 只认一种形状，不必在两处各写一遍分支。
+    mode_source: Any = sandbox_mode if sandbox_mode is not None else request.sandbox_mode
+    current_mode: Callable[[], str] = (
+        mode_source if callable(mode_source) else (lambda: normalize_mode(mode_source)))
     if request.tools_enabled:
         if writer is None:
             raise ValueError("工具模式必须给 writer：循环要边跑边落盘")
+        # 已告知的状态：[上一次告诉过模型的模式]。None = 这次请求还没说过。
+        announced: list = [None]
+        baseline = normalize_mode(sandbox_baseline if sandbox_baseline is not None
+                                 else current_mode())
         reply, steps, protocol_messages = run_agent_turn(
             client,
             normalized_messages,
@@ -441,13 +565,18 @@ def request_real_reply(
             # 观测状态属于哪个上下文也不能让模型挑（挑一个"已读过"的就能绕过守卫），
             # 取消权同样。should_stop 一路传到 run_bash —— 没有它，用户点了停止之后
             # 一条正在跑的 sleep 只能等它自己结束。
+            # sandbox_mode 同理（模型塞进参数里会被 _INJECTED_ARGS 过滤掉）：而且是回调，
+            # 每一步、每条命令都重折一次日志。
             execute_tool=make_executor(
                 workspace_root, observed_context, should_stop=should_stop,
-                sandbox_mode=sandbox_mode, audit_root=STORAGE_DIR,
+                sandbox_mode=current_mode, audit_root=STORAGE_DIR,
                 audit_session_id=observed_context_id.removeprefix("session:")),
             # 取消令牌的轮询函数一路传到循环里。web 从 TurnRegistry 拿，CLI 不传
             # （它在同一进程里前台跑，SIGINT 直接打断阻塞调用，不需要协作式检查）。
             should_stop=should_stop,
+            # 每步检查"权限被改了没"：两步之间被拨走，下一步就说一句（值没变则一句不说）。
+            refresh_messages=lambda history: project_policy_change(
+                history, current_mode(), baseline, announced),
         )
     else:
         assistant_message, _ = client.request_assistant_message(
@@ -477,6 +606,49 @@ def request_real_reply(
     )
 
 
+def _turn_elapsed_ms(session_id: str) -> int:
+    """从这一轮**开始**算到现在的毫秒数（暂停把一轮劈成几段，不能只算最后一段）。"""
+    meta, _ = session_store.last_turn_meta(SESSION_DIR, session_id)
+    started = meta.get("time")
+    if not isinstance(started, int):
+        return 0
+    return max(0, int(time.time() * 1000) - started)
+
+
+def close_turn(session_id: str, *, temperature: float | None = None,
+               error: str | None = None) -> None:
+    """这一轮**真的**结束了：写 turn-end、注销取消令牌。
+
+    为什么单独有这么一件事：以前"暂停等审批"那一刻就把 turn-end 写了，于是日志说这一轮
+    结束了、它后面却还在长；`/interrupt` 和界面上的 `running` 也一起失效（令牌在暂停时被
+    注销了）。现在暂停**不收尾**，收尾只发生在两个时刻：模型真的说完（正常运行/恢复跑到
+    出口），或者人明确放弃（/interrupt）。
+    """
+    workspace_id = session_store.load_workspace_id(SESSION_DIR, session_id)
+    writer = session_store.TurnWriter(SESSION_DIR, session_id, workspace_id=workspace_id)
+    writer.finish(durationMs=_turn_elapsed_ms(session_id), temperature=temperature, error=error)
+    token = REGISTRY.adopt(session_id)
+    if token is not None:
+        REGISTRY.end(session_id, token)
+
+
+def abandon_paused_turn(session_id: str, reason: str) -> bool:
+    """放弃一个**停在审批上**的轮次：把没答复的请求记成 cancelled，然后收尾。
+
+    这就是"停止"在暂停期间的含义（以前那一刻 `/interrupt` 恒返回 false，因为令牌已经被
+    注销、没有任何循环在跑）。记 cancelled 是为了不变式②：每个声明过的 tool_call 都得有
+    一条配对的 tool 结果，否则重放时那条请求会永远悬着。
+    """
+    if not session_store.turn_is_paused(SESSION_DIR, session_id):
+        return False
+    for request_id in session_store.pending_bash_requests(SESSION_DIR, session_id):
+        session_store.append_bash_result(
+            SESSION_DIR, session_id, request_id, status="cancelled",
+            content="[bash cancelled] 用户停止了这一轮：这条命令没有执行")
+    close_turn(session_id, error=f"cancelled: {reason}")
+    return True
+
+
 def resume_after_approval(session_id: str, *, approval: dict[str, Any] | None = None) -> str:
     """审批 bash 后恢复 loop：用执行结果替换 pending request，继续跑到最终文本。
 
@@ -493,10 +665,27 @@ def resume_after_approval(session_id: str, *, approval: dict[str, Any] | None = 
     provider = str(meta.get("provider") or DEFAULT_PROVIDER)
     model_name = str(meta.get("model") or DEFAULT_MODEL_NAME)
     tools_enabled = bool(meta.get("toolsEnabled"))
-    sandbox_mode = normalize_mode(str(meta.get("sandboxMode") or DEFAULT_SANDBOX_MODE))
+    # 模式**现折日志**，不从这一轮的 turn 记录推 —— 暂停期间人可能已经把开关拨走了，
+    # 而 turn 里那个值是"这一轮开始时"的快照。以前就卡在这里：批准一次 → 恢复 → 读到旧
+    # 快照 → 下一条 run_bash 又要一次审批，改多少次模式都没用。
+    recorded_mode = normalize_mode(str(meta.get("sandboxMode") or DEFAULT_SANDBOX_MODE))
+    current_mode: Callable[[], str] = lambda: session_sandbox_mode(session_id, recorded_mode)
     system_prompt = meta.get("systemPrompt")
 
     if not tools_enabled:
+        return ""
+
+    # **这一轮还停着吗**：模型已经给过最终答复的话，就不要再去"恢复"它 —— 那样发出的
+    # 请求会以 assistant 结尾（没有新的 user 消息），DeepSeek 的 thinking 模式直接 400，
+    # 结果是"命令跑了、结果也记了，但接口 500、界面卡在一条批不动的待审批上"。
+    # 一批里两条 bash 请求时就会走到这里：批准第一条之后模型已经答完了。
+    if not session_store.turn_is_paused(SESSION_DIR, session_id):
+        return ""
+
+    # **批里还有没答复的请求时也不能恢复**：模型一旦被叫起来，就可能在这一批还没批完的
+    # 时候收尾抽身（实测：它写完"回合在此暂停"就走了，审批窗口还开着、那一轮却结束了）。
+    # 等这一批都答完，再把所有结果一次性交给模型。命令本身不受影响 —— 批准哪条哪条就跑。
+    if session_store.pending_bash_requests(SESSION_DIR, session_id):
         return ""
 
     if temperature is None:
@@ -515,32 +704,71 @@ def resume_after_approval(session_id: str, *, approval: dict[str, Any] | None = 
 
     # 审批事件通知：并进开头那条 system（**不是**在末尾另加一条 —— 那会破坏
     # "只有一条 system、且在位置 0"，严格的模板会 400，见 with_system_note）。
+    #
+    # 措辞只讲**发生了什么**：批准了 → 它跑了、输出就是上面那条工具结果；拒绝了 → 没跑。
+    # 不许出现"会话没有任何变化"这类断言 —— 那是一句**冻结的承诺**，人只要在这期间拨了
+    # 沙箱开关它就成了假话，而模型会照着假话继续推理（以前就是这么写的）。
+    notes: list[str] = []
     if approval is not None:
         status = str(approval.get("status") or "")
         command = str(approval.get("command") or "")
         if status == "executed":
-            note = (
+            notes.append(
                 f"The user approved the pending bash command, and it has now run:\n{command}\n"
                 "Its output is the most recent tool result above. The approval covered that "
-                "single command only — nothing else about the session changed."
+                "single command only."
             )
         else:
-            note = (
+            notes.append(
                 f"The user rejected the pending bash command:\n{command}\n"
                 "It did not run. Do not retry it unless the user asks."
             )
+    # 权限变了**不当成系统消息说**：它由 project_policy_change 在步边界追加一句（与新一轮
+    # 完全同一条路），判据是"这一轮记录的模式 vs 折出来的此刻值"。系统里只留"发生了什么"
+    # 那类事件（批准/拒绝），因为那个必须待在开头那条 system 里（见 with_system_note）。
+    for note in notes:
         normalized_messages = with_system_note(normalized_messages, note)
+
+    # **接着用暂停时那枚令牌**：它一直留在 REGISTRY 里（暂停不收尾），所以
+    #   - 恢复期间 /interrupt 能真的把它停下来；
+    #   - 界面上的 running 在整段（暂停+恢复）里都是 true；
+    #   - 每会话互斥覆盖整段，不会有两个循环同时写这份日志。
+    token = REGISTRY.adopt(session_id)
+    if token is not None and token.should_stop():
+        # 人在暂停期间已经点了停止：别跑了，把这一轮按"放弃"收掉。
+        abandon_paused_turn(session_id, str(token.should_stop()))
+        return ""
 
     # 继续写同一轮：不 begin（否则会多算一轮 turn）。
     writer = session_store.TurnWriter(SESSION_DIR, session_id, workspace_id=workspace_id)
-    reply, _steps, _protocol = run_agent_turn(
-        client,
-        normalized_messages,
-        writer=writer,
-        execute_tool=make_executor(
-            workspace_root, observed_context, should_stop=None,
-            sandbox_mode=sandbox_mode, audit_root=STORAGE_DIR,
-            audit_session_id=session_id),
-        should_stop=None,
-    )
+    announced: list = [None]   # [上一次告诉过模型的模式]，见 project_policy_change
+    try:
+        if token is not None:
+            token.attach()
+        reply, _steps, _protocol = run_agent_turn(
+            client,
+            normalized_messages,
+            writer=writer,
+            execute_tool=make_executor(
+                workspace_root, observed_context,
+                should_stop=token.should_stop if token is not None else None,
+                sandbox_mode=current_mode, audit_root=STORAGE_DIR,
+                audit_session_id=session_id),
+            should_stop=token.should_stop if token is not None else None,
+            # 恢复期间人还可能再拨开关（面板正开着）—— 同样每步检查、变了就说一句。
+            refresh_messages=lambda history: project_policy_change(
+                history, current_mode(), recorded_mode, announced),
+        )
+    except TurnCancelled as exc:
+        # 恢复途中被停止：loop 的 finally 已经给没结果的调用补了合成结果，这里收尾。
+        close_turn(session_id, temperature=temperature, error=f"cancelled: {exc}")
+        return ""
+    finally:
+        if token is not None:
+            token.detach()
+
+    # 跑完了：如果**又**停在新的审批请求上，这一轮仍不收尾（等下一批审批）。
+    if session_store.turn_is_paused(SESSION_DIR, session_id):
+        return reply
+    close_turn(session_id, temperature=temperature)
     return reply

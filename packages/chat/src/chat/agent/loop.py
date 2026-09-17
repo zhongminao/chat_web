@@ -64,6 +64,7 @@ def run_agent_turn(
     tool_schemas: list[dict[str, Any]] | None = None,
     execute_tool: Callable[[str, str], str] | None = None,
     should_stop: Callable[[], str | None] | None = None,
+    refresh_messages: Callable[[list[dict[str, Any]]], list[dict[str, Any]]] | None = None,
     ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
     """跑完一轮 agent 任务。
 
@@ -79,6 +80,20 @@ def run_agent_turn(
         **只在这些边界上检查**：每次模型调用之前、每条工具调用之前 —— 正在等模型
         回复、或正在跑一个命令的那一下拦不住（同步阻塞，没有可从外部中断的句柄）。
         None = 不主动停（默认）。
+    refresh_messages: 步边界的**重投影**回调 —— 调模型之前把当前 history 换一份回来。
+        None = 历史原样（默认）。
+
+        为什么需要它：请求级"每轮算一次"会把**会变的事实**冻在消息里。典型的就是沙箱
+        策略 —— 它写着"当前是什么模式"，而模式一轮中途就能被人拨走，于是那句冻结的话
+        在下一步就成了假话。派生内容（当前策略/环境这类）应当**每步重算**。DSH 的
+        preStep 做的正是这件事（RuntimeContextProjection：值没变就不产生新快照）。
+
+        契约：
+        - 返回一份新的消息列表，循环此后用它（不要再改传进来那个）；
+        - **新增或改写的消息不进日志**：它是派生的，重放时会被重新算出来，记下来就是
+          同一份信息存两遍；而 `writer.record` 只认协议消息（assistant/tool），
+          这条路上没有它的位置；
+        - 回调自己要按"值没变就别改"来写：每步白改一次还会打掉模型侧的前缀缓存。
 
     不设轮数上限：只有模型不再要求调工具时才会返回（见模块 docstring）。
     调用方要限速/限预算，自己在这个循环外面或每步回调上做。
@@ -115,6 +130,12 @@ def run_agent_turn(
         # 步边界①：调模型之前。取消请求只会在这里被看见。
         if should_stop is not None and (reason := should_stop()):
             raise TurnCancelled(reason)
+
+        # 步边界①′：重投影"会变的事实"（当前沙箱策略等）。就在调模型之前 ——
+        # 这一句之后模型看到的就是此刻的值，所以模式在两步之间被人改掉，下一步就按
+        # 新的走，不必等下一轮、也不必等某次审批被点。
+        if refresh_messages is not None:
+            history = refresh_messages(history)
 
         assistant_message, _ = client.request_assistant_message(
             messages=history,

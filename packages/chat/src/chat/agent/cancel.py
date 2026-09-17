@@ -42,6 +42,24 @@ class CancelToken:
     def __init__(self) -> None:
         self._event = threading.Event()
         self._reason = ""
+        # 此刻有没有循环**真的**在跑这一轮（attach/detach 由跑循环的那段代码管）。
+        #
+        # 为什么需要它：暂停等审批时令牌是**留着**的（这样 /interrupt、running、停止按钮
+        # 在暂停期间才有意义），但那一刻并没有循环在跑 —— 取消信号没人接。靠这一格就能
+        # 区分"正在跑"和"停在审批上"，于是 /interrupt 能对后者做对的事（放弃这一轮），
+        # 而不是把信号丢进一个空循环。
+        self._attached = False
+
+    def attach(self) -> None:
+        """标记"循环现在跑起来了"。放在 run_agent_turn 外面，与 detach 成对（finally）。"""
+        self._attached = True
+
+    def detach(self) -> None:
+        self._attached = False
+
+    @property
+    def attached(self) -> bool:
+        return self._attached
 
     def cancel(self, reason: str) -> None:
         self._reason = reason or "cancelled"
@@ -78,11 +96,28 @@ class TurnRegistry:
             self._running[session_id] = token
             return token
 
-    def end(self, session_id: str, token: CancelToken) -> None:
-        """注销一轮。幂等，且只删自己那个 —— stale 的 token 不能删掉后来的同名会话。"""
+    def end(self, session_id: str, token: CancelToken | None) -> None:
+        """注销一轮。幂等，且只删自己那个 —— stale 的 token 不能删掉后来的同名会话。
+
+        token 为 None（这场会话压根没登记过，比如服务重启后接着恢复一轮、或测试里直接调
+        恢复路径）必须直接返回：`self._running.get()` 对不存在的键也给 None，于是
+        `None is None` 成立、接着 del 一个不存在的键 → KeyError。这个洞以前没人踩，是因为
+        调用方总是先 begin() 过；暂停要"收尾时才注销"，才有了没登记就得收尾的路径。
+        """
+        if token is None:
+            return
         with self._lock:
             if self._running.get(session_id) is token:
                 del self._running[session_id]
+
+    def adopt(self, session_id: str) -> CancelToken | None:
+        """拿回这场会话**已经登记着**的那枚令牌（暂停后恢复时用）；没有就 None。
+
+        暂停等审批时令牌不注销（不然 /interrupt 和 running 在暂停期间就失效了），所以恢复
+        的第一件事是把它认回来：接着接收取消、并在这一轮**真的**结束时注销它。
+        """
+        with self._lock:
+            return self._running.get(session_id)
 
     def cancel(self, session_id: str, reason: str) -> bool:
         """请求中止。没在跑 → False（不是错误：那一轮可能刚好自己结束了）。"""

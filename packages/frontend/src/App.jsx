@@ -14,6 +14,7 @@ import {
   interruptSession,
   rejectBashRequest,
   sendChat,
+  updateSessionSandbox,
 } from "./api";
 import { newSessionId, readStoredSessionId, writeStoredSessionId } from "./session";
 import { readStored, writeStored } from "./storage";
@@ -31,6 +32,13 @@ const WORKSPACE_KEY = "chat.workspaceId";
 // 等第一条消息发出去时由 /api/chat 的 tools_enabled 带进那一轮的记录里。
 const TOOLS_DRAFT_KEY = "chat.toolsEnabledDraft";
 const SANDBOX_DRAFT_KEY = "chat.sandboxModeDraft";
+
+// 这一批里还有没有别的命令在等批准（服务端 items 里的 kind/status 是权威）。
+function hasPendingRequest(items) {
+  return (items || []).some(
+    (item) => item && item.kind === "bash-request" && item.status === "pending"
+  );
+}
 
 function createId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -409,6 +417,9 @@ export default function App() {
     if (fresh) {
       setMessages(applyServerItems(fresh.items, sessionId));
     }
+    // 顺带交出来：调用方要据此判断"这一批还有没有别的命令在等我批"
+    // （有的话面板会继续问，不需要额外解释；没有才是"模型已经答完了"）。
+    return fresh?.items || [];
   }
 
   // 点下「允许一次/拒绝」后**立即**让面板消失、输入框回来（乐观标记 submitting），
@@ -430,9 +441,25 @@ export default function App() {
     // 服务端执行 bash + 恢复 loop 需要几秒，轮询能逐步把 bash-result 和最终回复画出来。
     startProgressPolling(sessionId);
     try {
-      await approveBashRequest(sessionId, requestId);
-      await refreshOpenSession();
+      const result = await approveBashRequest(sessionId, requestId);
+      const items = await refreshOpenSession();
       refreshSessions();
+      // resumed=false 有两种原因，界面要分开说：
+      //   ① 这一批还有别的命令在待批 → 面板会接着问（它自己就是解释），不啰嗦；
+      //   ② 这一轮模型已经给过最终答复 → 只有结果进了日志，必须说清，否则就是
+      //      "点了批准、什么都没发生"。
+      if (result && result.resumed === false && !hasPendingRequest(items)) {
+        setMessages((currentMessages) => [
+          ...currentMessages,
+          {
+            id: createId(),
+            role: "assistant",
+            content:
+              "这条命令已执行，输出就是上面那条工具步骤。这一轮模型已经给过最终答复，" +
+              "所以没有再让它接着说 —— 想让它针对这份输出说点什么，再发一句就行。",
+          },
+        ]);
+      }
     } catch (error) {
       setMessages((currentMessages) => [
         ...currentMessages.map((m) =>
@@ -452,9 +479,20 @@ export default function App() {
   async function rejectBash(requestId) {
     markBashSubmitting(requestId);
     try {
-      await rejectBashRequest(sessionId, requestId);
-      await refreshOpenSession();
+      const result = await rejectBashRequest(sessionId, requestId);
+      const items = await refreshOpenSession();
       refreshSessions();
+      if (result && result.resumed === false && !hasPendingRequest(items)) {
+        setMessages((currentMessages) => [
+          ...currentMessages,
+          {
+            id: createId(),
+            role: "assistant",
+            content: "这条命令被拒绝了（结果已记进日志）。这一轮模型已经给过最终答复，"
+              + "所以没有再让它接着说 —— 想让它换个做法，再发一句就行。",
+          },
+        ]);
+      }
     } catch (error) {
       setMessages((currentMessages) => [
         ...currentMessages.map((m) =>
@@ -467,6 +505,25 @@ export default function App() {
     } finally {
       submittingBashRef.current = null;
       setSubmittingBashId(null);
+    }
+  }
+
+  // 审批面板上的「停止这一轮」：整轮作罢。服务端会把没答复的请求记成 cancelled 并收尾
+  // （暂停期间没有循环在跑，所以这跟普通停止走的不是同一条路 —— 见 /interrupt）。
+  async function stopPausedTurn() {
+    setIsStopping(true);
+    try {
+      await interruptSession(sessionId);
+      await refreshOpenSession();
+      refreshSessions();
+    } catch (error) {
+      setMessages((currentMessages) => [
+        ...currentMessages,
+        { id: createId(), role: "assistant", content: `停止失败：${error.message}` },
+      ]);
+    } finally {
+      setIsStopping(false);
+      stopProgressPolling();
     }
   }
 
@@ -605,6 +662,23 @@ export default function App() {
     const next = event.target.value;
     setSandboxMode(next);
     writeStored(SANDBOX_DRAFT_KEY, next);
+    // **立刻上报**，别只留在本地：模式是"随时可改"的，服务端执行侧每次操作边界都折
+    // 一遍会话日志 —— 所以一轮中途（尤其是审批面板横着、模型停着等你回答的时候）拨开关，
+    // 下一条工具调用就按新的走，不必等这一轮结束。
+    //
+    // 上报失败不阻塞界面，也不回滚选择：这一轮 /api/chat 的 payload 里仍带着它（下一轮
+    // 才生效），所以失败的含义只是"立刻生效"这条没做到。没说过话的会话服务端回
+    // recorded: false —— 那也不是失败，那种选择本来就该是本地草稿。
+    updateSessionSandbox(sessionId, next).catch((error) => {
+      setMessages((currentMessages) => [
+        ...currentMessages,
+        {
+          id: createId(),
+          role: "assistant",
+          content: `切换沙箱模式没能在服务端生效（这一轮仍按旧模式跑）：${error.message}`,
+        },
+      ]);
+    });
   }
 
   function restoreDefaultSystemPrompt() {
@@ -674,8 +748,8 @@ export default function App() {
             className="tool-toggle"
             title={
               isLoading
-                ? "这一轮正在执行，等它结束后可以切换沙箱模式。"
-                : "workspace-write 只允许文件工具读写当前工作区并禁止 bash；full-access 不限制文件工具且允许 bash，bash 命令会审计。"
+                ? "这一轮正在执行，执行期间不能改（停在中途等审批时可以改 —— 那时切换下一条命令就按新的走）。"
+                : "workspace-write：文件工具只能动工作区内，bash 要一次性审批；full-access：都不限制。拨开关会写进会话日志，下一条工具调用就按新模式走。"
             }
           >
             沙箱
@@ -709,8 +783,10 @@ export default function App() {
             command={pendingBash.command}
             cwd={pendingBash.cwd}
             submitting={submittingBashId === pendingBash.requestId}
+            stopping={isStopping}
             onApprove={() => approveBash(pendingBash.requestId)}
             onReject={() => rejectBash(pendingBash.requestId)}
+            onStop={stopPausedTurn}
           />
         ) : (
           <Composer
