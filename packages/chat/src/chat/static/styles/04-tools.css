@@ -253,6 +253,24 @@
   color: var(--dsw-alias-state-error-primary);
 }
 
+/* 复制按钮**只在展开时出现**。
+ *
+ * 两个理由：折叠状态下工具调用是"一条很轻的行"（上游 DisclosureRow 的设计意图），
+ * 挂个按钮上去会把它压重；更要紧的是，折叠时输出看不见 —— 按钮和它能复制的东西
+ * 应该同时在场，否则那一排是"点了不知道会拿到什么"。
+ *
+ * 用 CSS 而不是 JS：展开状态本来就在 <details> 的 open 属性上。交给 React 存一份
+ * state 还得接 onToggle，轮询期间会多一次重渲染，而这件事纯属呈现。
+ * （这条不是抄上游的：DisclosureRow 只做 hover 时的图标互换，没有 [open] 门控的
+ * 操作区。所以数值上没什么可对的，只有理由。） */
+.tool-step summary .tool-step-copy {
+  display: none;
+}
+
+.tool-step[open] summary .tool-step-copy {
+  display: inline-flex;
+}
+
 /* 箭头要留在工具名旁边，所以它不能吃 margin-left:auto 的推力 */
 .tool-step summary::after {
   flex: none;

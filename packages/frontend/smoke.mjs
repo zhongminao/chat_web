@@ -1167,19 +1167,36 @@ copyCheck("复制成功后按钮显示对勾（图标换了，文案没换）",
           firstButton?.getAttribute("title") === "已复制",
           `实得 ${JSON.stringify(firstButton?.getAttribute("title"))}`);
 
+// 工具块的复制按钮**只在展开时出现**。jsdom 不算样式（也不加载外链 CSS），所以
+// 这条只能查样式表**文本**——和前面那条 .row-action / display:none 的做法一样。
+// 两条规则要成对存在：折叠时隐藏、[open] 时显示。
+const allCss = [...html.matchAll(/<link[^>]+href="\/static\/([^"]+\.css)"/g)]
+  .map((m) => readFileSync(new URL(m[1], STATIC_DIR), "utf-8"))
+  .join("\n")
+  .replace(/\/\*[\s\S]*?\*\//g, "");
+copyCheck("折叠时隐藏工具复制按钮（CSS 规则成对存在之一）",
+          /\.tool-step summary \.tool-step-copy\s*\{[^}]*display:\s*none/.test(allCss));
+copyCheck("展开时显示工具复制按钮（CSS 规则成对存在之二）",
+          /\.tool-step\[open\] summary \.tool-step-copy\s*\{[^}]*display:\s*inline-flex/.test(allCss));
+
 // 单条复制工具输出：走工具块**自己的**头部按钮，必须**逐字等于**日志里那一份
 // （含 spill 定位符与省略标记），而且**不能顺手把输出折叠掉** —— 按钮长在
 // <summary> 里，不拦事件冒泡的话点一下复制就会连带触发展开/收起。
+//
+// 这里手动先展开：按 CSS，按钮折叠时是看不见的（jsdom 不执行那条），所以测试按
+// 用户的真实动作来 —— 先点开工具行，再点复制。
 const toolDetails = rows[2]?.querySelector("details.tool-step");
-const wasOpen = toolDetails?.open;
+if (toolDetails) {
+  toolDetails.open = true;
+}
 toolCopyIn(rows[2])[0]?.click();
 await new Promise((resolve) => setTimeout(resolve, 30));
 copyCheck("工具块复制 = 模型读到的那份原文（定位符与省略标记都在）",
           copyScene.clipboardWrites.at(-1) === SPILL_RESULT,
           `实得 ${JSON.stringify(String(copyScene.clipboardWrites.at(-1)).slice(-80))}`);
 copyCheck("点工具块的复制不会把输出折叠掉（事件没冒泡到 summary）",
-          toolDetails?.open === wasOpen,
-          `点之前 open=${wasOpen}，点之后 open=${toolDetails?.open}`);
+          toolDetails?.open === true,
+          `点之后 open=${toolDetails?.open}`);
 copyCheck("工具块复制按钮显示「已复制」",
           toolCopyIn(rows[2])[0]?.textContent.trim() === "已复制",
           `实得 ${JSON.stringify(toolCopyIn(rows[2])[0]?.textContent.trim())}`);
