@@ -35,12 +35,24 @@ def check(label: str, ok: bool, detail: str = "") -> None:
         failures.append(label)
 
 
+# 工作区根。**必须显式注入给工具**：root 和 observed 一样是"宿主注入参数"，
+# 模型在 arguments 里塞不进来（见 tools._INJECTED_ARGS）。
+#
+# 这个检查原来调 execute_tool 时只传 observed、不传 root，于是沙箱回落成
+# sandbox_mode 的默认值 workspace-write + 一个不是这里临时目录的根 —— 临时目录里
+# 的每个路径都被判成"在工作区外"，**全部被拒**。后果特别隐蔽：那几条本来就期望
+# 被拒的断言照样绿（因为错误的原因通过），只有期望放行的 4 条红。
+WORK: Path | None = None
+
+
 def call(name: str, context, **kwargs) -> str:
-    return execute_tool(name, json.dumps(kwargs), observed=context)
+    return execute_tool(name, json.dumps(kwargs), root=str(WORK), observed=context)
 
 
 def main() -> int:
+    global WORK
     work = Path(tempfile.mkdtemp(prefix="check-observed-"))
+    WORK = work
     alpha = work / "alpha.txt"
     beta = work / "beta.txt"
     alpha.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
