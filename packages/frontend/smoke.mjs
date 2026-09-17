@@ -1103,9 +1103,10 @@ kindsCheck("行间公式原样保留（含 \\\\ 换行符与换行）",
 // 硬语义：**复制结果必须与日志原文逐字一致，也就是模型当时读到的那一份。**
 // 工具输出超标时，模型读到的是「中间被掐掉的预览 + spill 定位符」，它得靠那行地址
 // 自己再去 grep / read_file 取关键段落 —— 所以定位符**必须在复制结果里**；删掉它，
-// 复制出来的就不再是"模型读到的东西"。全文在 /tmp/chat-spill/ 下，前端没有任何
-// 接口能读它，所以"把完整内容捞进来"在这条路上也不可能发生。
-const SPILL_RESULT = "$ cat big.log\nline1\n\n...[4096 chars omitted]...\n\nline9\n[full output: 8123 chars saved to /tmp/chat-spill/2026-09-18/001122-abc123.log — the middle above was elided. Read it with read_file (page it with offset/limit), or grep/sed it with run_bash.]\n[exit code: 0]";
+// 复制出来的就不再是"模型读到的东西"。全文在 <工作区>/.chat-spill/ 下，前端没有
+// 任何接口能读它（那是服务端 read_file 的事），所以"把完整内容捞进来"在这条路上
+// 也不可能发生。
+const SPILL_RESULT = "$ cat big.log\nline1\n\n...[4096 chars omitted]...\n\nline9\n[full output: 8123 chars saved to /home/zhong/proj/.chat-spill/2026-09-18/001122-abc123.log — the middle above was elided. Read it with read_file (page it with offset/limit), or grep/sed it with run_bash.]\n[exit code: 0]";
 const copyScene = await scenario("10. 复制（每条消息一个）", {
   seedSession: "web-copy",
   sessionItems: {
@@ -1212,7 +1213,7 @@ copyCheck("点助手的复制 = 整轮（助手正文 + 工具输出，逐字拼
           turnText === EXPECTED_TURN,
           `实得 ${JSON.stringify(turnText.slice(0, 60))}…`);
 copyCheck("整轮里含工具输出全文（含 spill 定位符）",
-          turnText.includes("[full output: 8123 chars saved to /tmp/chat-spill/"));
+          turnText.includes("[full output: 8123 chars saved to /home/zhong/proj/.chat-spill/"));
 copyCheck("整轮不含提问（提问是另一个气泡的事）", !turnText.includes("帮我看看日志"));
 copyCheck("整轮不含下一段的内容", !turnText.includes("第二个回答"));
 // 同一段里的**每一条**助手条目复制出来都是这一整轮 —— 行为不取决于点的是哪一条

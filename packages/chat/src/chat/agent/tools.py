@@ -490,7 +490,9 @@ def run_bash(command:str,timeout:int=BASH_TIMEOUT_DEFAULT,*,root=None,should_sto
         # 只截断会让被掐掉的那段永远拿不回来（重跑还是被截，用 sed 又不知道该看哪几行），
         # 所以全文另存一份，内联换成"预览 + 定位符"。取回靠 run_bash 自己 grep/sed
         # 那个路径 —— 不必新工具，read_file 也不再分页。
-        path = save_spill(text, source="run_bash")
+        # root 传进去：spill 要落在**工作区里**，否则定位符指向工作区外，
+        # read_file 会被围栏拒掉，模型只能改用 run_bash（每次都要人批一遍）。
+        path = save_spill(text, source="run_bash", root=root)
         if path is not None:
             hint = (
                 f"\n[full output: {len(text)} chars saved to {path} — the middle above was "

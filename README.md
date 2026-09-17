@@ -31,7 +31,7 @@ tools/chat/                        # 仓库根（git 在这一层）
 │   │           ├── workspace_store.py # 工作区登记表（沙箱的边界）
 │   │           ├── cancel.py          # 轮次表 + 取消令牌
 │   │           ├── observed.py        # 先读后改守卫（进程内存，按 context 隔离）
-│   │           └── spill.py           # 超长输出落 /tmp/chat-spill/
+│   │           └── spill.py           # 超长输出落 <工作区>/.chat-spill/（read_file 读得回来）
 │   └── frontend/                  # Node 包：前端源码，esbuild 打包
 ├── evals/agent/                   # 评估：量 agent 做对没有
 ├── storage/                       # 运行时数据（不进 git）：sessions/*.jsonl + workspaces.json + bash-audit.jsonl
