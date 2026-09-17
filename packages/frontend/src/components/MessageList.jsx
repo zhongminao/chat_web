@@ -91,14 +91,15 @@ function hasMessageActions(message) {
   return message.role === "user" || message.role === "assistant";
 }
 
-// 助手那条回复的复制 = **它所在的整个 turn**（助手说过的每一句 + 它调过的每个工具的输出）。
+// 一轮 loop 只给**一个**复制按钮，挂在轮末那条助手条目上；同一轮里其它助手条目不画。
 //
-// 这里换过一版错的：曾经把"单条"和"整段"拆成两个按钮，结果点助手回复那个复制图标
-// 只拿到那一句正文，工具调用**没被带上** —— 而那正是最自然的动作。用户要复制
-// "这一轮 agent 干了什么"，答案不该取决于他点的是哪个按钮。
+// 为什么必须这样：一段 loop 是"模型说一句 → 调工具 → 再收尾"，而日志里它是**多条**
+// assistant 记录（中间夹着工具结果），界面上就是两个气泡。每个气泡都放一个按钮，
+// 看起来就成了"两段、要复制两次" —— 尽管它们复制的内容完全一样。一轮一个按钮，
+// 语义才和"复制这一整轮"对上。
 //
-// 所以现在：**每一个**助手条目的复制都指向它所属的那一段（同一段里的助手条目
-// 复制出来是同一份文本）。只有一条助手回复、没有工具的轮次，结果就等于那一条本身。
+// 注意这不改变内容的顺序：工具结果仍然在两句叙述**中间**（那是真实发生顺序），
+// 所以两个气泡不会合并 —— 合并就得挪动工具块的位置，那是拿真实性换整齐。
 function turnTextByRow(messages) {
   const texts = new Map();
   for (const range of assistantTurnRanges(messages)) {
@@ -106,9 +107,11 @@ function turnTextByRow(messages) {
     if (!text) {
       continue;   // 整段没内容（比如只有一条 plan）就没有可复制的
     }
-    for (let index = range.start; index <= range.end; index += 1) {
+    // 从后往前找**第一条**（也就是最后一条）真的画出来的助手条目
+    for (let index = range.end; index >= range.start; index -= 1) {
       if (messages[index].role === "assistant" && isRendered(messages[index])) {
         texts.set(index, text);
+        break;
       }
     }
   }
@@ -142,12 +145,12 @@ export default function MessageList({ messages, isLoading }) {
         if (!isRendered(message)) {
           return null;
         }
-        // 助手条目复制的是**整轮**（含工具调用）；user 条目复制自己的正文。
-        const copyText = message.role === "assistant"
-          ? (turnTexts.get(index) ?? messageToText(message))
-          : messageToText(message);
+        // 助手侧：只有**轮末**那一条有复制按钮，复制的是整轮（含工具调用与输出）；
+        // user 侧：复制自己的提问。
+        const turnText = message.role === "assistant" ? turnTexts.get(index) : null;
+        const copyText = message.role === "assistant" ? turnText : messageToText(message);
         const copyLabel = message.role === "assistant"
-          ? "复制这一轮（含工具调用与输出）"
+          ? "复制这一整轮（含工具调用与输出）"
           : "复制这条提问";
         return (
         <div
@@ -204,9 +207,9 @@ export default function MessageList({ messages, isLoading }) {
               没有可复制文本的行（正在执行、未知条目）整条不画 —— 否则会留一个
               28px 高的空行。
 
-              「助手条目复制整轮」这件事见上面 turnTextByRow 的注释：复制必须
-              带上工具调用，否则用户拿到的是半份。工具块另外还有自己的复制按钮
-              （在它自己的头部行里），那是"只要这一块输出"用的。 */}
+              「一轮一个复制按钮」见上面 turnTextByRow 的注释：助手侧只有轮末那一条
+              有按钮，复制的是整轮（含工具调用与输出）。工具块另外还有自己的复制
+              按钮（在它自己的头部行里），那是"只要这一块输出"用的。 */}
           {hasMessageActions(message) && copyText ? (
             <div className="message-actions">
               <CopyControl text={copyText} label={copyLabel} className="message-action" renderIcon />

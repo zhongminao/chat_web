@@ -1131,9 +1131,11 @@ const copyCheck = (label, condition, detail = "") => {
 const rows = [...copyScene.document.querySelectorAll(".chat-box .message-row")];
 const copyButtonsIn = (row) => [...row.querySelectorAll(".message-action")];
 const toolCopyIn = (row) => [...row.querySelectorAll(".tool-step-copy")];
-// 消息级操作条只属于**消息**（user / assistant）：下标 2 是工具步骤，没有。
-copyCheck("消息级复制图标只出现在消息行上（工具行没有）",
-          JSON.stringify(rows.map((row) => copyButtonsIn(row).length)) === JSON.stringify([1, 1, 0, 1, 1, 1]),
+// 消息级操作条：user 行一个（复制提问）；助手侧**只有轮末那一条**有（复制整轮），
+// 中间那条"先跑一下"没有 —— 否则一轮看起来是两段、像要复制两次。
+// 下标 0=user 1=assistant(轮中) 2=工具 3=assistant(轮末) 4=user 5=assistant(轮末)
+copyCheck("助手侧只有轮末那条有复制按钮（一轮一个）",
+          JSON.stringify(rows.map((row) => copyButtonsIn(row).length)) === JSON.stringify([1, 0, 0, 1, 1, 1]),
           `实得 ${JSON.stringify(rows.map((row) => copyButtonsIn(row).length))}`);
 // 操作条里**只有一个**控件 —— 不再有"单条 + 整段"两个按钮那种设计。
 // 按子元素个数判，不查具体类名：那个被删掉的类名不该留在测试里当引用。
@@ -1216,12 +1218,8 @@ copyCheck("整轮里含工具输出全文（含 spill 定位符）",
           turnText.includes("[full output: 8123 chars saved to /home/zhong/proj/.chat-spill/"));
 copyCheck("整轮不含提问（提问是另一个气泡的事）", !turnText.includes("帮我看看日志"));
 copyCheck("整轮不含下一段的内容", !turnText.includes("第二个回答"));
-// 同一段里的**每一条**助手条目复制出来都是这一整轮 —— 行为不取决于点的是哪一条
-copyButtonsIn(rows[1])[0]?.click();
-await new Promise((resolve) => setTimeout(resolve, 30));
-copyCheck("同一段的另一条助手条目也复制整轮（不取决于点哪一条）",
-          copyScene.clipboardWrites.at(-1) === EXPECTED_TURN,
-          `实得 ${JSON.stringify(String(copyScene.clipboardWrites.at(-1)).slice(0, 40))}…`);
+copyCheck("轮中的那条助手条目没有复制按钮（所以一轮不会看起来像两段）",
+          copyButtonsIn(rows[1]).length === 0);
 // 第二段的助手条目只含它自己那一轮
 copyButtonsIn(rows[5])[0]?.click();
 await new Promise((resolve) => setTimeout(resolve, 30));
@@ -1313,8 +1311,12 @@ copyCheck("批准之后：助手的两条正文都还在（loop 没被切成两�
           doneAssistantRows.length === 2, `实得 ${doneAssistantRows.length}`);
 copyCheck("批准之后：执行结果作为工具块画出来了",
           approvalDone2.document.querySelectorAll(".chat-box details.tool-step").length === 1);
-// 点**前半句**那条的复制 —— 它必须给出整轮，而不是只有那半句
-[...doneAssistantRows[0].querySelectorAll(".message-action")][0]?.click();
+copyCheck("前半句那个气泡上没有复制按钮（一轮只有一个，挂在轮末）",
+          doneAssistantRows[0].querySelectorAll(".message-action").length === 0);
+copyCheck("轮末那个气泡上有且只有一个复制按钮",
+          doneAssistantRows[1].querySelectorAll(".message-action").length === 1);
+// 点轮末那条 —— 它必须给出整轮，而不是只有后半句
+[...doneAssistantRows[1].querySelectorAll(".message-action")][0]?.click();
 await new Promise((resolve) => setTimeout(resolve, 40));
 const approvalTurnText = String(approvalDone2.clipboardWrites.at(-1) || "");
 copyCheck("复制这一轮 = 前半句 + 工具输出 + 后半句（逐字）",
@@ -1324,12 +1326,9 @@ copyCheck("前半截没有被审批切掉", approvalTurnText.includes("我来跑
 copyCheck("后半截也在", approvalTurnText.includes("工作区在 /home/zhong/workplace。"));
 copyCheck("pending 的请求卡片没有混进复制结果（它是审批交互，不是内容）",
           !approvalTurnText.includes("bashreq-approve-1") && !approvalTurnText.includes("Not executed yet"));
-// 从**后半句**那条点，结果必须一样 —— 行为不取决于点的是哪一条
-[...doneAssistantRows[1].querySelectorAll(".message-action")][0]?.click();
-await new Promise((resolve) => setTimeout(resolve, 40));
-copyCheck("从后半句那条点，复制出来还是同一整轮",
-          approvalDone2.clipboardWrites.at(-1) === approvalTurnText,
-          `实得 ${JSON.stringify(String(approvalDone2.clipboardWrites.at(-1)).slice(0, 50))}…`);
+copyCheck("整轮里正好一个复制按钮（不会被审批断成两段）",
+          approvalDone2.document.querySelectorAll(".chat-box .message-action").length === 2,
+          `实得 ${approvalDone2.document.querySelectorAll(".chat-box .message-action").length}（1 个 user + 1 个助手轮末）`);
 
 console.log();
 if (failures) {
