@@ -1280,9 +1280,60 @@ copyCheck("以工具收尾时，助手复制 = 助手正文 + 工具输出（不
           tailToolScene.clipboardWrites.at(-1) === "我来跑\n\n$ ls\na.txt\n[exit code: 0]",
           `实得 ${JSON.stringify(tailToolScene.clipboardWrites.at(-1))}`);
 
+// 场景 11：审批暂停不能把"整轮复制"切成两段。
+//
+// 一次带审批的 loop 在日志里长这样：user → assistant(说要跑) → bash-request(pending)
+// → [用户批准] → bash-request(executed) → assistant(收尾)。中间那个条目界面上不画
+// （审批只在输入端），但它**必须仍然属于同一段** —— 否则批准之后"复制这一轮"
+// 就只剩后半截，模型说要跑的那半句丢了。
+//
+// 两个静态会话里只留**批准之后**这一个：停在审批那一刻能复制的本来就只有已发生
+// 的部分（后面还没发生，那是预期不是 bug），而且轮询帧会让审批面板接管输入区、
+// 把断言测成脚手架的行为。这里只钉"批准之后整轮是不是完整"。
+const approvalUser = { kind: "user", content: "看看工作区" };
+const approvalHead = { kind: "assistant", content: "我来跑一下。" };
+const approvalDone = { kind: "bash-request", id: "bashreq-approve-1", command: "pwd",
+  cwd: "/tmp/ws", timeout: 60, status: "executed",
+  result: "$ pwd\n/home/zhong/workplace\n[exit code: 0]" };
+const approvalTail = { kind: "assistant", content: "工作区在 /home/zhong/workplace。" };
+
+// —— 批准并收尾之后 —— 复制必须给出**整轮**
+const approvalDone2 = await scenario("11. 批准之后：整轮复制不被切成两段", {
+  seedSession: "web-copy-approval-done",
+  sessionItems: {
+    id: "web-copy-approval-done", workspaceId: "ws-bc8da407",
+    settings: { toolsEnabled: true }, toolsLocked: true, running: false,
+    items: [approvalUser, approvalHead, approvalDone, approvalTail],
+  },
+  expectTools: true, expectLocked: true,
+});
+const doneRows = [...approvalDone2.document.querySelectorAll(".chat-box .message-row")];
+const doneAssistantRows = doneRows.filter((row) => row.querySelector(".markdown-content"));
+copyCheck("批准之后：助手的两条正文都还在（loop 没被切成两段）",
+          doneAssistantRows.length === 2, `实得 ${doneAssistantRows.length}`);
+copyCheck("批准之后：执行结果作为工具块画出来了",
+          approvalDone2.document.querySelectorAll(".chat-box details.tool-step").length === 1);
+// 点**前半句**那条的复制 —— 它必须给出整轮，而不是只有那半句
+[...doneAssistantRows[0].querySelectorAll(".message-action")][0]?.click();
+await new Promise((resolve) => setTimeout(resolve, 40));
+const approvalTurnText = String(approvalDone2.clipboardWrites.at(-1) || "");
+copyCheck("复制这一轮 = 前半句 + 工具输出 + 后半句（逐字）",
+          approvalTurnText === ["我来跑一下。", approvalDone.result, "工作区在 /home/zhong/workplace。"].join("\n\n"),
+          `实得 ${JSON.stringify(approvalTurnText.slice(0, 70))}…`);
+copyCheck("前半截没有被审批切掉", approvalTurnText.includes("我来跑一下。"));
+copyCheck("后半截也在", approvalTurnText.includes("工作区在 /home/zhong/workplace。"));
+copyCheck("pending 的请求卡片没有混进复制结果（它是审批交互，不是内容）",
+          !approvalTurnText.includes("bashreq-approve-1") && !approvalTurnText.includes("Not executed yet"));
+// 从**后半句**那条点，结果必须一样 —— 行为不取决于点的是哪一条
+[...doneAssistantRows[1].querySelectorAll(".message-action")][0]?.click();
+await new Promise((resolve) => setTimeout(resolve, 40));
+copyCheck("从后半句那条点，复制出来还是同一整轮",
+          approvalDone2.clipboardWrites.at(-1) === approvalTurnText,
+          `实得 ${JSON.stringify(String(approvalDone2.clipboardWrites.at(-1)).slice(0, 50))}…`);
+
 console.log();
 if (failures) {
   console.log(`失败 ${failures} 项`);
   process.exit(1);
 }
-console.log("UI 冒烟测试通过（12 个场景）");
+console.log("UI 冒烟测试通过（13 个场景）");

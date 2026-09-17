@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -118,6 +118,30 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="chat-app", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+@app.middleware("http")
+async def revalidate_frontend_assets(request: Request, call_next):
+    """给前端产物带上 `Cache-Control: no-cache`（= 每次回来校验，不是不缓存）。
+
+    为什么必须显式加：`StaticFiles` 只发 ETag / Last-Modified，**不发 Cache-Control**
+    —— 浏览器于是启用**启发式缓存**（典型是按 Last-Modified 的年龄取个比例），可能
+    根本不回来问就用旧副本。症状是"代码改了、产物也重建了，界面上还是旧行为"，
+    看上去像后端没生效，实际是浏览器没来取。
+
+    这个坑在本仓库真实发生过两次：`styles.css` 拆成 6 张表之后，缓存的旧
+    `index.html` 会去加载那个**已被删除**的文件（页面直接没样式）；以及前端交互
+    改完之后，用户看到的行为还是上一版的。
+
+    no-cache 不是 no-store：文件没变时服务端回 304，开销很小；变了立刻拿到新的。
+    带上 `/`（index.html）—— 它引用哪些样式表/脚本，正是必须先刷新的那一份。
+    """
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
 
 # 鉴权**不在这个进程里**做。
 #
