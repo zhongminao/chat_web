@@ -337,6 +337,12 @@ def with_system_note(messages: list[dict], note: str) -> list[dict]:
 
     normalize_messages 那边本来就是"只有一条 system、且在最前面"（它会把历史里
     所有 system 丢掉，只留自己拼的那条）。这里跟着同一条不变式走，而不是另立一套。
+
+    **动这段代码前请注意**：任何"在 normalize_messages 之后往消息列表里再塞一条
+    非 user/assistant/tool 角色的消息"的写法都会重蹈覆辙。想复核就在恢复路径上
+    让模型真调一次，断言实际发出的 messages 里位置 > 0 没有 system —— 一条 assert
+    就够。（这条不变式原来有一个专门的校验脚本，后来按"少放文件"的要求删了；
+    复核方法留在这里，免得下次再踩。）
     """
     if messages and messages[0].get("role") == "system":
         head = dict(messages[0])
