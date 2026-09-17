@@ -322,6 +322,31 @@ def normalize_messages(
     return normalized_messages
 
 
+def with_system_note(messages: list[dict], note: str) -> list[dict]:
+    """把一条系统级事件说明并进**开头那条 system 消息**（没有就在最前面补一条）。
+
+    为什么不能在末尾再 append 一条 system —— 那是原来的写法，也正是这个 bug 的根源：
+    消息列表里出现第二条 system，严格的 chat 模板直接拒收。vLLM 上的 Qwen 回的是
+
+        400 System message must be at the beginning.
+
+    云端 API（DeepSeek）宽容，所以这个 bug **只在本地模型上暴露**，而且表现极具
+    误导性：命令其实执行了、结果也落盘了，但恢复请求被拒 → 审批接口 500 →
+    模型永远接不上话；用户再点一次，又生成一条新的待审批 —— 看起来就是"明明命令
+    是对的，却一直要审批"。
+
+    normalize_messages 那边本来就是"只有一条 system、且在最前面"（它会把历史里
+    所有 system 丢掉，只留自己拼的那条）。这里跟着同一条不变式走，而不是另立一套。
+    """
+    if messages and messages[0].get("role") == "system":
+        head = dict(messages[0])
+        head["content"] = f"{head['content']}\n\n{note}" if head["content"] else note
+        return [head, *messages[1:]]
+    # 没有 system（调用方明确传了 ""：提示词一条都不发）时补一条，仍然在位置 0。
+    # 事件说明不是提示词 —— 它得让模型看见，所以那种配置下也会多出这一条。
+    return [{"role": "system", "content": note}, *messages]
+
+
 def elapsed_ms(started: float) -> int:
     return int((time.monotonic() - started) * 1000)
 
@@ -482,7 +507,8 @@ def resume_after_approval(session_id: str, *, approval: dict[str, Any] | None = 
     prior_messages = [ChatMessage(**record) for record in prior]
     normalized_messages = normalize_messages(prior_messages, system_prompt, tools_enabled=True)
 
-    # 审批事件通知：只进本次请求，不落盘（历史里已经有 bash-result 那条工具结果）。
+    # 审批事件通知：并进开头那条 system（**不是**在末尾另加一条 —— 那会破坏
+    # "只有一条 system、且在位置 0"，严格的模板会 400，见 with_system_note）。
     if approval is not None:
         status = str(approval.get("status") or "")
         command = str(approval.get("command") or "")
@@ -497,7 +523,7 @@ def resume_after_approval(session_id: str, *, approval: dict[str, Any] | None = 
                 f"The user rejected the pending bash command:\n{command}\n"
                 "It did not run. Do not retry it unless the user asks."
             )
-        normalized_messages.append({"role": "system", "content": note})
+        normalized_messages = with_system_note(normalized_messages, note)
 
     # 继续写同一轮：不 begin（否则会多算一轮 turn）。
     writer = session_store.TurnWriter(SESSION_DIR, session_id, workspace_id=workspace_id)
