@@ -216,6 +216,48 @@
   color: var(--dsw-alias-label-primary);
 }
 
+/* 工具名。头部行是 flex，复制控件要靠 margin-left:auto 顶到最右 —— 不能用
+ * justify-content: space-between：summary 里还有个 ::after 画的展开箭头，
+ * space-between 会把箭头也推到中间去。所以给按钮 order: 1 让它排在箭头之后。 */
+.tool-step-name {
+  min-width: 0;
+}
+
+/* 工具块头部的复制控件。几何与代码块那个（03-conversation.css 的
+ * .markdown-code-copy）刻意保持一致 —— 两者都是"一块内容的复制"，
+ * 长得不一样会让人以为是两种东西。这里没有共用同一个类名：共用会在
+ * 04 和 03 之间造一条跨表依赖，而这两张表目前都是自足的。 */
+.tool-step-copy {
+  order: 1;
+  flex: none;
+  min-height: 22px;
+  margin-left: auto;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.tool-step-copy:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.tool-step-copy.is-failed,
+.tool-step-copy.is-failed:hover {
+  background: transparent;
+  color: var(--dsw-alias-state-error-primary);
+}
+
+/* 箭头要留在工具名旁边，所以它不能吃 margin-left:auto 的推力 */
+.tool-step summary::after {
+  flex: none;
+}
+
 .tool-step summary:focus-visible {
   outline: 1.5px solid var(--dsw-alias-button-info-fill);
   outline-offset: 2px;

@@ -1130,12 +1130,19 @@ const copyCheck = (label, condition, detail = "") => {
 const rows = [...copyScene.document.querySelectorAll(".chat-box .message-row")];
 const copyButtonsIn = (row) => [...row.querySelectorAll(".message-action")];
 const turnButtonsIn = (row) => [...row.querySelectorAll(".message-copy-turn")];
-copyCheck("每行有且只有一个单条复制图标",
-          rows.length === 6 && rows.every((row) => copyButtonsIn(row).length === 1),
+const toolCopyIn = (row) => [...row.querySelectorAll(".tool-step-copy")];
+// 消息级操作条只属于**消息**（user / assistant）：下标 2 是工具步骤，没有。
+copyCheck("消息级复制图标只出现在消息行上（工具行没有）",
+          JSON.stringify(rows.map((row) => copyButtonsIn(row).length)) === JSON.stringify([1, 1, 0, 1, 1, 1]),
           `实得 ${JSON.stringify(rows.map((row) => copyButtonsIn(row).length))}`);
-// 「复制整段」挂在**每一段助手 loop 的末尾**，不在段首，也不在 user 行上。
-// 这个 fixture 里两段助手 loop 分别结束于第 3 行（下标 3，"日志里 line9 是异常点。"）
-// 和第 5 行（下标 5，"第二个回答"）。
+copyCheck("工具行改用代码块那种复制按钮（不是消息气泡那套）",
+          toolCopyIn(rows[2]).length === 1 && toolCopyIn(rows[2])[0].textContent.trim() === "复制",
+          `实得 ${JSON.stringify(toolCopyIn(rows[2]).map((el) => el.textContent.trim()))}`);
+copyCheck("工具行的复制按钮长在头部行里（summary 内）",
+          !!rows[2]?.querySelector("summary .tool-step-copy"));
+// 「复制整段」挂在**每一段助手 loop 的末尾**，且只挂助手回复那一行。
+// 这个 fixture 里两段助手 loop 分别结束于下标 3（"日志里 line9 是异常点。"）
+// 和下标 5（"第二个回答"）。
 const tailRows = rows.map((row, i) => (turnButtonsIn(row).length ? i : -1)).filter((i) => i >= 0);
 copyCheck("「复制整段」只出现在两段助手 loop 的末尾",
           JSON.stringify(tailRows) === JSON.stringify([3, 5]), `实得行号 ${JSON.stringify(tailRows)}`);
@@ -1144,7 +1151,6 @@ copyCheck("user 行上没有「复制整段」",
 copyCheck("「复制整段」是文字按钮（不是第二个图标）",
           tailRows.length > 0 && turnButtonsIn(rows[tailRows[0]])[0]?.textContent.trim() === "复制整段",
           `实得 ${JSON.stringify(turnButtonsIn(rows[tailRows[0] || 0])[0]?.textContent)}`);
-// 段中间的助手条目（下标 1，"先跑一下"）不该有整段按钮
 copyCheck("段中间的助手条目没有「复制整段」", turnButtonsIn(rows[1]).length === 0);
 // 位置：操作条必须是气泡的**下一个兄弟**（在下面），不是浮在右上角。
 const firstRow = rows[0];
@@ -1168,12 +1174,22 @@ copyCheck("复制成功后按钮显示对勾（图标换了，文案没换）",
           firstButton?.getAttribute("title") === "已复制",
           `实得 ${JSON.stringify(firstButton?.getAttribute("title"))}`);
 
-// 单条复制工具输出：必须**逐字等于**日志里那一份（含 spill 定位符与省略标记）
-copyButtonsIn(rows[2])[0]?.click();
+// 单条复制工具输出：走工具块**自己的**头部按钮，必须**逐字等于**日志里那一份
+// （含 spill 定位符与省略标记），而且**不能顺手把输出折叠掉** —— 按钮长在
+// <summary> 里，不拦事件冒泡的话点一下复制就会连带触发展开/收起。
+const toolDetails = rows[2]?.querySelector("details.tool-step");
+const wasOpen = toolDetails?.open;
+toolCopyIn(rows[2])[0]?.click();
 await new Promise((resolve) => setTimeout(resolve, 30));
-copyCheck("单条复制工具输出 = 模型读到的那份原文（定位符与省略标记都在）",
+copyCheck("工具块复制 = 模型读到的那份原文（定位符与省略标记都在）",
           copyScene.clipboardWrites.at(-1) === SPILL_RESULT,
           `实得 ${JSON.stringify(String(copyScene.clipboardWrites.at(-1)).slice(-80))}`);
+copyCheck("点工具块的复制不会把输出折叠掉（事件没冒泡到 summary）",
+          toolDetails?.open === wasOpen,
+          `点之前 open=${wasOpen}，点之后 open=${toolDetails?.open}`);
+copyCheck("工具块复制按钮显示「已复制」",
+          toolCopyIn(rows[2])[0]?.textContent.trim() === "已复制",
+          `实得 ${JSON.stringify(toolCopyIn(rows[2])[0]?.textContent.trim())}`);
 
 // 助手那一条：正文原文（含 Markdown 记号，因为复制的就是原文）
 copyButtonsIn(rows[3])[0]?.click();
@@ -1219,9 +1235,41 @@ copyCheck("降级失败时按钮报错（不静默假装成功）",
           copyButtonsIn(rows[0])[0]?.getAttribute("title") === "复制失败",
           `实得 ${JSON.stringify(copyButtonsIn(rows[0])[0]?.getAttribute("title"))}`);
 
+// 场景 10b：一段 loop **以工具调用收尾**（助手最后没再说话）。
+//
+// 这是"整段按钮挂哪一行"的边界：工具行没有消息操作条，所以它必须回到本段
+// **最后一条助手回复**上，而不是硬挂在工具行下面。顺带钉住工具行本身有没有
+// 消息级图标（没有）。
+const tailToolScene = await scenario("10b. 整段按钮挂在最后一条助手回复上", {
+  seedSession: "web-copy-tail",
+  sessionItems: {
+    id: "web-copy-tail", workspaceId: "ws-bc8da407",
+    settings: { toolsEnabled: true }, toolsLocked: true, running: false,
+    items: [
+      { kind: "user", content: "跑一下" },
+      { kind: "assistant", content: "我来跑" },
+      { kind: "step", tool: "run_bash", arguments: '{"command":"ls"}', result: "$ ls\na.txt\n[exit code: 0]", ok: true },
+    ],
+  },
+  expectTools: true, expectLocked: true,
+});
+const tailRows2 = [...tailToolScene.document.querySelectorAll(".chat-box .message-row")];
+const turnInRow = (row) => [...row.querySelectorAll(".message-copy-turn")].length;
+copyCheck("以工具收尾时，整段按钮落在助手回复那一行",
+          tailRows2.length === 3 && turnInRow(tailRows2[1]) === 1 && turnInRow(tailRows2[2]) === 0,
+          `实得 ${JSON.stringify(tailRows2.map(turnInRow))}`);
+copyCheck("以工具收尾时，工具行仍然没有消息级图标",
+          tailRows2[2]?.querySelectorAll(".message-action").length === 0);
+// 点下去复制的是这一段的助手侧全集（助手正文 + 工具输出）
+[...tailRows2[1].querySelectorAll(".message-copy-turn")][0]?.click();
+await new Promise((resolve) => setTimeout(resolve, 30));
+copyCheck("整段内容 = 助手正文 + 工具输出（不含提问）",
+          tailToolScene.clipboardWrites.at(-1) === "我来跑\n\n$ ls\na.txt\n[exit code: 0]",
+          `实得 ${JSON.stringify(tailToolScene.clipboardWrites.at(-1))}`);
+
 console.log();
 if (failures) {
   console.log(`失败 ${failures} 项`);
   process.exit(1);
 }
-console.log("UI 冒烟测试通过（11 个场景）");
+console.log("UI 冒烟测试通过（12 个场景）");

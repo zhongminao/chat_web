@@ -7,20 +7,23 @@ import { assistantTurnRanges, assistantTurnToText, messageToText } from "../mess
 import { IconCheckOutline16, IconCopyOutline16 } from "../icons";
 import MarkdownContent from "./MarkdownContent";
 
-// 复制控件。两种长相，一套状态机：
+// 复制控件。三种长相，一套状态机（className 由调用方给，见下面三处用法）：
 //
-//   icon=true   28×28 图标按钮，复制成功后把图标换成对勾（DSH 的
-//               MessageIconActions 就是这么做的：图标按钮 28×28、圆角 28px、
-//               透明底 label-tertiary，悬停换 interactive-bg-hover 底 +
-//               label-secondary 色）
-//   icon=false  文字胶囊「复制整段」，挂在**段尾**，用来区分"更大范围"的操作 ——
-//               两个都是图标的话点错是必然的
+//   气泡下面（消息级）  28×28 图标按钮，复制成功后把图标换成对勾（DSH 的
+//                       MessageIconActions 就是这么做的：28×28、圆角 28px、
+//                       透明底 label-tertiary，悬停换 interactive-bg-hover 底 +
+//                       label-secondary 色）
+//   段尾               文字胶囊「复制整段」—— 与消息级差一整轮的内容，
+//                       做成文字才不会点错
+//   工具块头部          文字按钮「复制」，**和代码块那个一模一样**（上游也是这个
+//                       位置逻辑：TerminalBlock 的 header 左边是命令行、右边是
+//                       复制控件）。工具输出是"一块内容"，不该套消息那套操作条。
 //
 // 与上游唯一的出入：上游 writeClipboard 失败时静默（不声称成功），这里额外把控件
 // 染成错误色并给出 title。原因是本服务跑在纯 HTTP 上，手机那个 origin 没有
 // clipboard API，只能走 execCommand 回退 —— 两条路都可能不通，"点了没反应"
 // 是这里最需要避免的状态。
-function CopyControl({ text, label, icon = false }) {
+function CopyControl({ text, label, className, renderIcon = false }) {
   const [state, setState] = useState("idle");   // idle | copied | failed
   const timer = useRef(null);
 
@@ -35,7 +38,10 @@ function CopyControl({ text, label, icon = false }) {
     return null;
   }
 
-  async function handleClick() {
+  async function handleClick(event) {
+    // 工具块的那个按钮长在 <summary> 里 —— 不拦住冒泡的话，点复制会顺带把
+    // 输出折叠/展开掉。消息级那几个不在可点区域里，拦一下也无害。
+    event.stopPropagation();
     const ok = await copyText(text);
     setState(ok ? "copied" : "failed");
     if (timer.current !== null) {
@@ -45,18 +51,17 @@ function CopyControl({ text, label, icon = false }) {
   }
 
   const title = state === "copied" ? "已复制" : state === "failed" ? "复制失败" : label;
+  const shown = state === "copied" ? "已复制" : state === "failed" ? "复制失败" : label;
 
   return (
     <button
       type="button"
-      className={`${icon ? "message-action" : "message-copy-turn"}${state === "failed" ? " is-failed" : ""}`}
+      className={`${className}${state === "failed" ? " is-failed" : ""}`}
       onClick={handleClick}
       title={title}
       aria-label={title}
     >
-      {icon
-        ? (state === "copied" ? <IconCheckOutline16 /> : <IconCopyOutline16 />)
-        : (state === "copied" ? "已复制" : state === "failed" ? "复制失败" : label)}
+      {renderIcon ? (state === "copied" ? <IconCheckOutline16 /> : <IconCopyOutline16 />) : shown}
     </button>
   );
 }
@@ -79,7 +84,19 @@ function isRendered(message) {
   return true;
 }
 
+// 只有**消息**（你的提问、助手的回复）才有气泡下面那套操作条。
+// 工具块没有 —— 它的复制控件长在自己的头部行里（见 tool-step 的 summary），
+// 因为工具输出是"一块内容"，跟代码块同类，不该套消息那套。
+function hasMessageActions(message) {
+  return message.role === "user" || message.role === "assistant";
+}
+
 // 每一段助手 loop 的「复制整段」挂在哪一行、复制出什么。
+//
+// 只挂在**助手回复**那一行上（段尾的工具块不挂）：工具行没有消息操作条，
+// 而"整段"是个消息级的概念。所以这里找的是最后一条 hasMessageActions 的行。
+// 一段里如果助手一句话都没说（只有工具调用），就没有可挂的地方 —— 那种轮次里
+// 每个工具块自己的复制按钮仍然可用。
 function turnCopyTargets(messages) {
   const targets = new Map();
   for (const range of assistantTurnRanges(messages)) {
@@ -88,7 +105,7 @@ function turnCopyTargets(messages) {
       continue;   // 整段没内容（比如只有一条 plan）就不挂按钮
     }
     for (let index = range.end; index >= range.start; index -= 1) {
-      if (isRendered(messages[index])) {
+      if (isRendered(messages[index]) && hasMessageActions(messages[index])) {
         targets.set(index, text);
         break;
       }
@@ -134,8 +151,14 @@ export default function MessageList({ messages, isLoading }) {
           <div className={message.role === "user" ? "bubble user-bubble" : "bubble"}>
             {message.role === "tool-step" ? (
               <details className="tool-step">
+                {/* 工具块的头部行：左边工具名、右边复制控件（上游 TerminalBlock 的
+                    header 就是这个排布：命令行在左、复制控件在右）。按钮在 <summary>
+                    里，所以 CopyControl 里拦了事件冒泡 —— 否则点复制会顺带折叠。 */}
                 <summary>
-                  ⚙ {message.tool} {message.ok ? "" : "（执行失败）"}
+                  <span className="tool-step-name">
+                    ⚙ {message.tool} {message.ok ? "" : "（执行失败）"}
+                  </span>
+                  <CopyControl text={copyText} label="复制" className="tool-step-copy" />
                 </summary>
                 <pre>{message.result}</pre>
               </details>
@@ -148,7 +171,10 @@ export default function MessageList({ messages, isLoading }) {
               // 长相与普通 run_bash 步骤一致，不再是一个抢眼的"Bash 请求"卡片。
               <details className="tool-step" open={message.status === "rejected"}>
                 <summary>
-                  ⚙ run_bash {message.status === "rejected" ? "（已拒绝）" : ""}
+                  <span className="tool-step-name">
+                    ⚙ run_bash {message.status === "rejected" ? "（已拒绝）" : ""}
+                  </span>
+                  <CopyControl text={copyText} label="复制" className="tool-step-copy" />
                 </summary>
                 <pre>{message.result}</pre>
               </details>
@@ -172,12 +198,13 @@ export default function MessageList({ messages, isLoading }) {
               没有可复制文本的行（正在执行、未知条目）整条不画 —— 否则会留一个
               28px 高的空行。
 
-              「复制整段」只在**一段助手 loop 的末尾**出现：一整段包含助手说过的
-              每一句和它调过的每个工具。它不含你的提问 —— 那是另一个气泡的事。 */}
-          {copyText || turnText ? (
+              「复制整段」只在**一段助手 loop 的末尾**出现，且只挂在助手回复那一行：
+              一整段包含助手说过的每一句和它调过的每个工具。它不含你的提问 ——
+              那是另一个气泡的事。工具块不参与这套操作条。 */}
+          {hasMessageActions(message) && (copyText || turnText) ? (
             <div className="message-actions">
-              <CopyControl text={copyText} label="复制" icon />
-              {turnText ? <CopyControl text={turnText} label="复制整段" /> : null}
+              <CopyControl text={copyText} label="复制" className="message-action" renderIcon />
+              {turnText ? <CopyControl text={turnText} label="复制整段" className="message-copy-turn" /> : null}
             </div>
           ) : null}
         </div>
