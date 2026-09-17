@@ -58,11 +58,6 @@ function isDelimiterRun(text, position, runLength) {
   return !(isAsciiAlnum(before) && isAsciiAlnum(after));
 }
 
-// 这个星号是否「贴着 ASCII」（左或右任一侧是 ASCII 字母/数字）。
-function asciiAdjacent(text, position, runLength) {
-  return isAsciiAlnum(text[position - 1]) || isAsciiAlnum(text[position + runLength]);
-}
-
 // 开定界符：后面必须跟非空白（`* 3` 这种不开放）。
 function canOpenEmphasis(text, position, marker) {
   return !isWhitespace(text[position + marker.length]);
@@ -78,21 +73,34 @@ function canCloseEmphasis(text, position) {
   return !isWhitespace(text[position - 1]);
 }
 
-// 开合双方必须**同类**：一边贴着 ASCII、另一边不贴，就不配对。
+// 这对定界符允不允许配对。
 //
-// 挡的是 `面积 = 长*宽，对角线 = 2*(长+宽)`：`长*宽` 那个星号两侧都是汉字（不贴
-// ASCII），而 `2*(` 那个星号贴着数字。没有这条时前者会拿后者当闭合，把中间整段吞成
-// 斜体；有了这条，两者不同类 → 不配对 → 全字面量。
-function findRunClose(text, fromIndex, runLength, openerAscii) {
+// 这里换过三版，把前两版的坑记下来，免得又绕回去：
+//
+//  v1（首版）：闭定界符"后面必须是空白/标点"。挡住了 `4*5`，但中文行内强调全废 ——
+//     `这是*强调*文字` 的闭定界符后面就是汉字，整句退化成字面量。
+//  v2：改成"开合双方必须**同为** ASCII 邻接"。救回了 `长*宽 … 2*(`，但把
+//     `**P99 延迟**` 判死了 —— 那里开定界符贴着 `P`（ASCII）、闭定界符贴着 `迟`
+//     （汉字），两侧不同类。而"中文句子里夹数字/英文的粗体"几乎全是这个形状，
+//     等于误伤了最高频的一种写法。纯 ASCII 和纯中文都好，**混排就坏**。
+//  v3（当前）：只保留**单向**约束 —— 闭定界符左边粘着 ASCII 字母/数字时
+//     （`e*`、`2*` 这种"星号贴在词尾"的形状），才要求开定界符右边也粘着 ASCII
+//     （`*n`、`*P`）。也就是"这对定界符是围着一段以 ASCII 开头的内容开的"。
+//
+// 为什么单向就够：要挡的是 `2*(` 这种**闭定界符贴在 ASCII 词尾**的形状拿前面的
+// 中文星号当开定界符。反过来（`**P99 延迟**` —— 开头 ASCII、结尾汉字）是正常强调，
+// 没有任何数学含义需要防，所以不设约束。
+function findRunClose(text, openerPos, runLength) {
   const marker = "*".repeat(runLength);
-  let cursor = indexOfUnescaped(text, marker, fromIndex);
+  const openerRightIsAscii = isAsciiAlnum(text[openerPos + runLength]);
+  let cursor = indexOfUnescaped(text, marker, openerPos + runLength);
   while (cursor >= 0) {
     const length = starRunLength(text, cursor);
     if (
       length === runLength &&
       isDelimiterRun(text, cursor, length) &&
-      asciiAdjacent(text, cursor, length) === openerAscii &&
-      canCloseEmphasis(text, cursor)
+      canCloseEmphasis(text, cursor) &&
+      (!isAsciiAlnum(text[cursor - 1]) || openerRightIsAscii)
     ) {
       return cursor;
     }
@@ -209,7 +217,7 @@ function renderInline(text, keyPrefix = "i") {
         index += 2;
         continue;
       }
-      const end = findRunClose(text, index + 2, 2, asciiAdjacent(text, index, 2));
+      const end = findRunClose(text, index, 2);
       if (end < 0) {
         // 找不到合法闭合就**原样留下这两个星号**，然后继续扫后面的内容
         // （不是把剩下的整段一起吐出来 —— 那样后面真正的粗体/斜体就不渲染了）。
@@ -252,7 +260,7 @@ function renderInline(text, keyPrefix = "i") {
         index += 1;
         continue;
       }
-      const end = findRunClose(text, index + 1, 1, asciiAdjacent(text, index, 1));
+      const end = findRunClose(text, index, 1);
       if (end < 0) {
         nodes.push("*");
         index += 1;
