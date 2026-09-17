@@ -168,12 +168,17 @@ const providers = {
   system_prompt_with_tools: "You are an agent that can take real actions through tools.\nTools available:\nread_file — read any UTF-8 text file (page large files with offset/limit);\nwrite_file — create a new file or fully overwrite one, parent directories are created automatically (use ONLY for new files or complete rewrites);\nedit_file — replace exactly one text block in an existing file (old_text must be copied verbatim from read_file output, never invented);\nrun_bash — execute a shell command (ls, grep, git, run programs);\nplan — create or update the current task checklist for longer multi-step work.\nRules: always read a file before editing or quoting it; never invent file contents; do not reuse or overwrite existing helper scripts (such as run_task.sh) for ad-hoc tests — create a uniquely named file instead. When the task is done, reply concisely in the user's language and summarize what you read, wrote, edited, or ran. Do not describe or speculate about sandbox or permission settings; report only what the tools actually returned.\n\nYou are a helpful assistant. Keep context across turns and answer in the same language as the user when possible.",
 };
 
-/* 服务端会返回的历史（渲染顺序：user / step / assistant 交替）。 */
+/* 服务端会返回的历史（渲染顺序：user / step / assistant 交替）。
+ *
+ * 最后那行是**符号保真**用的：路径通配（`src/chat/*.py`）和乘法里的星号一旦被
+ * 当成强调定界符吃掉，界面上看不见、复制出来却少字符（README 里满地都是 `*.jsonl`
+ * 这种路径）。逐字断言它们必须在 textContent 里原样出现。
+ * `\*` 是转义：应当只留星号，反斜杠不显示。 */
 const storedItems = [
   { kind: "user", content: "历史里的第一个提问：**用户原文不渲染**" },
   { kind: "step", tool: "run_bash", arguments: '{"command":"echo hi"}',
     result: "$ echo hi\nhi\n[exit code: 0]", ok: true },
-  { kind: "assistant", content: "历史里的回答\n\n- Markdown 列表项\n\n`inline_code`" },
+  { kind: "assistant", content: "历史里的回答\n\n- Markdown 列表项\n\n`inline_code`\n\n| 项 | 事实 |\n|---|---|\n| 技术栈 | React 18 + esbuild |\n\n```python\nprint(\"hi\")\n```\n\n保真：packages/chat/src/chat/*.py 与 *.jsonl 与 2 * 3 与 4*5 与 \\*字面星号\\* 与 **粗体**" },
 ];
 
 /* ── 响应体的**唯一构造点** ────────────────────────────────────────────────
@@ -295,6 +300,7 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
   const pageErrors = [];
   const fetchCalls = [];
   const patched = [];
+  const clipboardWrites = [];
   let pollFrames = 0;   // 进度轮询场景：每次 GET /api/sessions/{id} 返回下一帧
   // 每个场景一份可变的登记表：DELETE 之后要真的少一项，否则"删完列表还在"这种
   // bug 测不出来（stub 原样返回旧列表就等于假装删成功了）。
@@ -317,6 +323,10 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
   window.addEventListener("error", (event) =>
     pageErrors.push(String(event.error || event.message)));
   window.console.error = (...args) => pageErrors.push(args.map(String).join(" "));
+  Object.defineProperty(window.navigator, "clipboard", {
+    configurable: true,
+    value: { writeText: async (value) => { clipboardWrites.push(value); } },
+  });
 
   if (seedSession) {
     window.localStorage.setItem("chat.sessionId", seedSession);
@@ -744,7 +754,7 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
       console.log("    " + line.split("\n")[0].slice(0, 160));
     }
   }
-  return { text, html: html2, fetchCalls, document: window.document };
+  return { text, html: html2, fetchCalls, document: window.document, clipboardWrites };
 }
 
 // 场景 1：全新会话
@@ -773,8 +783,31 @@ checkRestored("历史里的提问渲染出来了", restored.text.includes("历�
 checkRestored("历史里的回答渲染出来了", restored.text.includes("历史里的回答"));
 checkRestored("助手回答里的 Markdown 列表被渲染", !!restored.document.querySelector(".markdown-content ul li"));
 checkRestored("助手回答里的行内代码被渲染", !!restored.document.querySelector(".markdown-content code"));
+checkRestored("助手回答里的 Markdown 表格被渲染", !!restored.document.querySelector(".markdown-content table th"));
+checkRestored("表格单元格内容渲染正确", restored.document.querySelector(".markdown-content table td:nth-child(2)")?.textContent === "React 18 + esbuild");
+checkRestored("代码块显示语言名", restored.document.querySelector(".markdown-code-language")?.textContent === "python");
+const copyButton = restored.document.querySelector(".markdown-code-copy");
+copyButton?.click();
+await new Promise((resolve) => setTimeout(resolve, 30));
+checkRestored("代码块复制按钮只复制代码内容", restored.clipboardWrites.at(-1) === "print(\"hi\")", `实得 ${JSON.stringify(restored.clipboardWrites.at(-1))}`);
 checkRestored("用户消息保持原样文本，不走 Markdown", !restored.document.querySelector(".user-bubble strong"));
 checkRestored("工具步骤也渲染出来了", restored.text.includes("run_bash"));
+
+// ── 符号保真：不该被渲染的东西必须逐字留下 ─────────────────────────────────
+//
+// 这一组守的是"解析器吞字符"这类**只看得见复制结果**的 bug：星号被当成强调定界符
+// 拿掉之后，界面照样正常，只有粘出来才发现 `src/chat/*.py` 变成了 `src/chat/.py`。
+// 所以断言的不是"渲染成功"，而是**原文逐字仍在**。
+const restoredMarkdownText = restored.document.querySelector(".markdown-content")?.textContent || "";
+const fidelity = (label, expected) =>
+  checkRestored(label, restoredMarkdownText.includes(expected), `实得 ${JSON.stringify(restoredMarkdownText.slice(-90))}`);
+fidelity("路径通配 src/chat/*.py 逐字保留", "packages/chat/src/chat/*.py");
+fidelity("通配 *.jsonl 逐字保留", "*.jsonl");
+fidelity("乘法 2 * 3 逐字保留", "2 * 3");
+fidelity("词内星号 4*5 逐字保留", "4*5");
+fidelity("\\* 转义只留星号（反斜杠不显示）", "*字面星号*");
+checkRestored("转义的反斜杠没有漏到界面上", !restoredMarkdownText.includes("\\*字面星号"));
+checkRestored("正常的 **粗体** 仍然渲染", !!restored.document.querySelector(".markdown-content strong"));
 // 提示词面板要恢复成**这个会话在用的那份**，不是回到默认 —— 以前提示词只活在
 // React state 里，刷新就丢，而会话历史还在服务端，两边对不上。
 //
@@ -939,9 +972,109 @@ await scenario("7. bash 审批（输入端接管）", {
   expectTools: true, expectLocked: true, expectApproval: true,
 });
 
+// 场景 8：空正文的 assistant 条目不该画出空气泡。
+//
+// 这种记录是真实的：带 tool_calls 的轮次里，模型可能只说工具、不说人话，正文就是
+// 空串（前后空白也算空）。画出来是一行什么都没有的气泡，看着像界面坏了。
+const emptyAssistant = await scenario("8. 空 assistant 正文不画气泡", {
+  seedSession: "web-empty-assistant",
+  sessionItems: {
+    id: "web-empty-assistant", workspaceId: "ws-bc8da407",
+    settings: { toolsEnabled: true }, toolsLocked: true, running: false,
+    items: [
+      { kind: "user", content: "只调工具那一轮" },
+      { kind: "assistant", content: "" },
+      { kind: "assistant", content: "   \n  " },
+      { kind: "step", tool: "run_bash", arguments: '{"command":"ls"}', result: "a.txt", ok: true },
+      { kind: "assistant", content: "收尾说明" },
+    ],
+  },
+  expectTools: true, expectLocked: true,
+});
+// 断言写成"数气泡个数"而不是"没看到空白"：空白本来就看不见，测不出来。
+// 期望正好 3 个气泡 —— user + step + 收尾 assistant，两条空 assistant 都不占行。
+const emptyAssistantBubbles = emptyAssistant.document.querySelectorAll(".chat-box .bubble").length;
+kindsCheck("空正文的 assistant 不占气泡（只剩 user + step + 收尾）",
+           emptyAssistantBubbles === 3, `实得 ${emptyAssistantBubbles} 个气泡`);
+kindsCheck("没有渲染出空的 .markdown-content 壳",
+           ![...emptyAssistant.document.querySelectorAll(".markdown-content")]
+             .some((node) => !node.textContent.trim()));
+kindsCheck("正常正文的 assistant 照常显示",
+           emptyAssistant.text.includes("收尾说明"));
+
+// 场景 9：行内 Markdown 边界 —— 该渲染的要渲染，不该动的要逐字别动。
+//
+// 这一组守的是两类**只有复制出来才发现**的 bug，它们不报错、不白屏，只是安静地显示错：
+//   1. **吞字符**：`a*b 与 c*(d)`、`长*宽…2*(`、`$E = m*c^2$` 里的星号被当成强调
+//      定界符配成一对，于是从第一个星号一路吃到第二个，用户复制路径/公式就少字符；
+//   2. **该渲染不渲染**：`这是*强调*文字` 这种中文行内强调退化成字面量 —— 中文不加
+//      空格，任何"定界符外侧必须是空白"的规则都会把它判死。
+// 一个用例 = 一个 assistant 条目，这样能逐条断言"文本 + 有没有 <em>/<strong>"，
+// 而不是只对整段做一次 includes（那样某一条悄悄坏了根本看不出来）。
+const MD_EDGE_CASES = [
+  // [输入, 期望的可见文本, 期望的强调标签(""|"em"|"strong")]
+  ["3*4", "3*4", ""],
+  ["3*4 和 5*6", "3*4 和 5*6", ""],
+  ["a*b 与 c*(d)", "a*b 与 c*(d)", ""],
+  ["面积 = 长*宽，对角线 = 2*(长+宽)", "面积 = 长*宽，对角线 = 2*(长+宽)", ""],
+  ["2*3 and 4*5", "2*3 and 4*5", ""],
+  ["5*6*78", "5*6*78", ""],
+  ["P = 2*pi*r，A = pi*r**2", "P = 2*pi*r，A = pi*r**2", ""],
+  ["通配路径 packages/chat/src/chat/*.py 与 *.json", "通配路径 packages/chat/src/chat/*.py 与 *.json", ""],
+  // 公式：`$...$` 区间不透明，所以里面两颗星号也不会被配对（纯靠星号规则救不了这条）。
+  ["设 $E = m*c^2$，且 $x \\in \\mathbb{R}^{*}$", "设 $E = m*c^2$，且 $x \\in \\mathbb{R}^{*}$", ""],
+  ["$x^{*}$ 与 $y^{*}$", "$x^{*}$ 与 $y^{*}$", ""],
+  // `$` 也是货币符号：不成对就整个当字面量，不能被误认成公式。
+  ["价格 $5 到 $10 之间", "价格 $5 到 $10 之间", ""],
+  // 强调：中文行内（两侧都是汉字）、英文、混排三种都要活。
+  ["这是*强调*文字", "这是强调文字", "em"],
+  ["这是**强调**文字", "这是强调文字", "strong"],
+  ["**粗体**文字", "粗体文字", "strong"],
+  ["see *note* here", "see note here", "em"],
+  ["**bold** text", "bold text", "strong"],
+  ["中文*english*中文", "中文english中文", "em"],
+  ["*斜体*.", "斜体.", "em"],
+  // 行内码仍然最优先：里面的星号天生不解析。
+  ["`长*宽` 与 `2*(a+b)`", "长*宽 与 2*(a+b)", ""],
+];
+const MD_DISPLAY_MATH = "$$\n\\begin{align} a &= b \\\\ c &= d \\end{align}\n$$";
+
+const mdEdge = await scenario("9. 行内边界（乘法/路径/公式/强调）", {
+  seedSession: "web-md-edge",
+  sessionItems: {
+    id: "web-md-edge", workspaceId: "ws-bc8da407",
+    settings: { toolsEnabled: false }, toolsLocked: true, running: false,
+    items: [
+      { kind: "user", content: "边界用例" },
+      ...MD_EDGE_CASES.map(([input]) => ({ kind: "assistant", content: input })),
+      { kind: "assistant", content: MD_DISPLAY_MATH },
+    ],
+  },
+  expectLocked: true,
+});
+// user 条目不走 markdown（那是刻意的边界），所以 .markdown-content 只对应 assistant 条目。
+const mdNodes = [...mdEdge.document.querySelectorAll(".chat-box .markdown-content")];
+kindsCheck("边界用例都渲染出来了（条数对得上）",
+           mdNodes.length === MD_EDGE_CASES.length + 1,
+           `期望 ${MD_EDGE_CASES.length + 1}，实得 ${mdNodes.length}`);
+MD_EDGE_CASES.forEach(([input, wantText, wantTag], i) => {
+  const node = mdNodes[i];
+  const text = node?.textContent ?? "";
+  const tag = node?.querySelector("em") ? "em" : node?.querySelector("strong") ? "strong" : "";
+  kindsCheck(`#${String(i + 1).padStart(2, "0")} ${JSON.stringify(input)}`,
+             text === wantText && tag === wantTag,
+             `实得 ${JSON.stringify(text)} [${tag}]`);
+});
+const mathNode = mdNodes[MD_EDGE_CASES.length];
+kindsCheck("行间公式渲染成独立的 math-block",
+           !!mdEdge.document.querySelector(".chat-box .markdown-math-block"));
+kindsCheck("行间公式原样保留（含 \\\\ 换行符与换行）",
+           mathNode?.textContent === MD_DISPLAY_MATH,
+           `实得 ${JSON.stringify(mathNode?.textContent)}`);
+
 console.log();
 if (failures) {
   console.log(`失败 ${failures} 项`);
   process.exit(1);
 }
-console.log("UI 冒烟测试通过（8 个场景）");
+console.log("UI 冒烟测试通过（10 个场景）");

@@ -1115,9 +1115,29 @@
 .markdown-content ul,
 .markdown-content ol,
 .markdown-content blockquote,
-.markdown-content pre {
+.markdown-content pre,
+.markdown-content .markdown-table-wrap,
+.markdown-content .markdown-code-frame,
+.markdown-content .markdown-math-block {
   margin: 0 0 12px;
 }
+
+/* 行间公式：不排版数学（没引 KaTeX），只是**原样**摆出来。
+ * 用等宽字体是为了让它一眼看出"这是一块公式"，而不是被当成普通正文读过去。
+ * white-space: pre-wrap 是必须的 —— 否则 `$$` 单独成行那种多行公式会被压成一行。 */
+.markdown-content .markdown-math-block {
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--dsw-alias-label-secondary);
+  font-family: var(--ds-font-family-code);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+/* 行内公式 `$...$`：**刻意不加任何样式**。
+ * 它和普通正文长得一样，因为这里只做"保住字符"，不做排版；加个底色或等宽反而会让人
+ * 以为数学被渲染了。这个 class 留着是为了以后真接 KaTeX 时有挂载点。 */
 
 .markdown-content h1,
 .markdown-content h2,
@@ -1168,19 +1188,95 @@
   font-size: 0.9em;
 }
 
-.markdown-content pre {
-  overflow: auto;
-  padding: 10px 12px;
+.markdown-code-frame {
+  overflow: hidden;
   border: 1px solid var(--dsw-alias-border-l1);
   border-radius: 8px;
   background: var(--dsw-alias-markdown-code-block);
 }
 
-.markdown-content pre code {
+.markdown-code-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  padding: 0 10px 0 12px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.markdown-code-language {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--ds-font-family-code);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdown-code-copy {
+  flex: none;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 22px;
+}
+
+.markdown-code-copy:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.markdown-content pre.markdown-code-block {
+  overflow: auto;
+  margin: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.markdown-content pre.markdown-code-block code {
   display: block;
   padding: 0;
   background: transparent;
   white-space: pre;
+}
+
+.markdown-table-wrap {
+  overflow-x: auto;
+}
+
+.markdown-content table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.markdown-content th,
+.markdown-content td {
+  padding: 7px 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-content th {
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+}
+
+.markdown-content td {
+  color: var(--dsw-alias-label-secondary);
 }
 
 .markdown-content a {

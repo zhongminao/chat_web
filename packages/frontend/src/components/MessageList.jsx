@@ -18,8 +18,14 @@ export default function MessageList({ messages, isLoading }) {
         // 待审批 / 正在提交的 bash 请求**不进对话流**：审批交互只在输入端
         // （Composer 位置的审批面板），免得它把对话本身挤开。
         // 跑完之后才以普通工具步骤的形式出现，和 read_file/run_bash 一样可折叠。
+        //
+        // 正文为空的 assistant 条目也**整行不画**：那种记录确实会落盘（带 tool_calls
+        // 的轮次里，模型只调用工具、没说任何话），画出来就是一个空气泡 —— 界面看着
+        // 像出错了。判断放在这里而不是只放在 MarkdownContent 里：后者只能去掉里层
+        // 的 .markdown-content，外层 .bubble 照样占一行。
         if (
           message.role === "plan" ||
+          (message.role === "assistant" && !String(message.content || "").trim()) ||
           (message.role === "bash-request" &&
             (message.status === "pending" || message.status === "submitting"))
         ) {
