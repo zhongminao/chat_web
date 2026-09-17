@@ -21,7 +21,8 @@ tools/chat/                        # 仓库根（git 在这一层）
 │   │       ├── openai_client.py   # provider 目录 + 无状态 Client
 │   │       ├── providers.yaml     # 供应商/模型目录
 │   │       ├── prompts.yaml       # 系统提示词模板（base / tools）
-│   │       ├── static/            # 前端**产物**（提交进仓库）+ 样式
+│   │       ├── static/            # 前端**产物**（提交进仓库）
+│   │       │   └── styles/        #   6 张样式表，见「前端构建」
 │   │       └── agent/             # 纯逻辑：不知道 HTTP，也不知道 CLI
 │   │           ├── loop.py            # 工具循环（无轮数上限，边跑边落盘，遇审批暂停）
 │   │           ├── tools.py           # 四个工具 + 分发 + root/沙箱/审计注入
@@ -82,6 +83,7 @@ workspace-write 下模型调 run_bash
 ```
 
 - 审批面板**只在输入端**，对话流里不出现"Bash 请求"卡片；跑完才以普通工具步骤（`⚙ run_bash`）出现。
+- 恢复时把"用户批准了这条命令"**并进开头那条 system**，而不是在消息末尾再加一条：严格的 chat 模板拒收中途出现的第二条 system（vLLM 上的 Qwen 直接 400），云端 API 宽容 —— 所以这类错**只在本地模型上暴露**，症状还会伪装成"命令执行了却一直要审批"。
 - 同一批工具不会因为审批而丢：批次里其余 `read_file`/`write_file`/`edit_file` 照常跑完，只是**不再进入下一轮模型**。
 - **审计**在 `storage/bash-audit.jsonl`（append-only）：`sessionId` / `requestId` / 模式 / `cwd` / 命令 / `timeout` / `exitCode` / `stopped` / 输出大小 / `denied` + 原因。删会话**不删审计**。
 
@@ -112,6 +114,14 @@ pnpm run check      # build + smoke（jsdom 里真跑产物）
 ```
 
 产物**提交进仓库**，所以不碰前端的人 clone 下来直接能跑，机器上不需要 Node。
+
+**样式**拆在 `static/styles/` 下（6 张表：外壳 / 控件 / 对话 / 工具 / 输入卡 / 窄屏+弹窗，
+`index.html` 逐个 `<link>`）。表之间的先后由各文件里的 `@layer` 声明决定，**与 link 顺序无关**；
+样式不参与构建，因为 `theme.css` 是上游逐字拷贝、要保持"升级时整份覆盖"的性质。
+静态产物带 `Cache-Control: no-cache`，所以改完**普通刷新**就够，不需要强刷。
+
+**复制**（前端）：助手侧**一轮一个**按钮，复制整轮（含工具调用与输出）；工具块自己的复制
+按钮只在展开时出现。复制出来的就是日志原文 —— 包括 spill 定位符，那是模型也读到的东西。
 
 ## Markdown 渲染
 
@@ -206,7 +216,7 @@ pnpm run check      # build + smoke（jsdom 里真跑产物）
 python packages/chat/check_api.py          # 后端：路由不 5xx + 契约比对 + 语义断言
 python packages/chat/check_observed.py     # 守卫：按 context 隔离 + 硬拦 + TTL，不花钱
 python packages/chat/demo_agent_loop.py    # agent 闭环保真：假 client + 真工具，不花钱
-cd packages/frontend && pnpm run check      # 前端：构建 + jsdom 冒烟（8 个场景）
+cd packages/frontend && pnpm run check      # 前端：构建 + jsdom 冒烟（13 个场景）
 python evals/agent/run.py --runs 2          # 评估：agent 做对没有
 ```
 
@@ -296,9 +306,10 @@ python evals/agent/run.py -m gpt-5.5   # 换模型
 | 中断的轮次 `temperature` 是 `null` | 取消时调用方拿不到 `TurnResult`（提示词不受影响）。|
 | `bash-audit.jsonl` 无轮转 | append-only，删除会话不清理它，会一直增长。|
 | 契约只钉形状、不钉值域 | 除 `item_kind` 外的枚举靠 pydantic 的 `Literal` 保证。|
-| 停止按钮这条交互没有测试 | `smoke.mjs` 覆盖渲染，不覆盖点击。|
+| 停止按钮这条交互没有测试 | `smoke.mjs` 覆盖渲染与复制按钮的点击，不覆盖停止按钮。|
 | key 轮换没有回归测试 | "重读 bashrc 免重启"只靠人验过。|
 | bashrc 里删掉 key 不会让进程忘掉它 | 只做"读到就更新"，彻底移除仍需重启。|
 | 变更提醒"只一次"意味着重试可以绕过重读 | 刻意的"告知而非禁止"，代价是第二次试就能过。|
 | observed 不跨进程共享 | 网页与 CLI 各有一份。|
 | 陈旧保护是 check-then-write，不是 CAS | 中间有窗口，而 `run_bash` 能挤进去。|
+| provider 对消息形状的容忍度不同 | 严格的 chat 模板（vLLM 上的 Qwen）会拒收中途出现的第二条 system 消息，云端 API 照收。所以"消息形状"这类错**只在本地模型上暴露**，还得靠人想起来去本地模型上试一遍。|
