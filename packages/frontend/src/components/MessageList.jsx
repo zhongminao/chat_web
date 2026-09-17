@@ -1,3 +1,5 @@
+// 样式：packages/chat/src/chat/static/styles/03-conversation.css（.message-row / .bubble / .message-action）与 04-tools.css（.tool-step / .tool-running / .item-unknown）
+// 窄屏（手机）覆盖统一在 06-responsive-overlay.css，改小屏表现去那里找。
 import React, { useEffect, useRef, useState } from "react";
 
 import { copyText } from "../clipboard";

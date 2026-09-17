@@ -1,3 +1,5 @@
+// 样式：packages/chat/src/chat/static/styles/02-controls.css（.system-panel）
+// 窄屏（手机）覆盖统一在 06-responsive-overlay.css，改小屏表现去那里找。
 import React from "react";
 
 // 系统提示词面板。

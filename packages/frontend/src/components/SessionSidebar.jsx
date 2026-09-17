@@ -1,3 +1,5 @@
+// 样式：packages/chat/src/chat/static/styles/01-shell.css（.sidebar / .group-* / .session-item / .row-action）
+// 窄屏（手机）覆盖统一在 06-responsive-overlay.css，改小屏表现去那里找。
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
 import {

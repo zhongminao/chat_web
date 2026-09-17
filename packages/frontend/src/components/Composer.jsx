@@ -1,3 +1,5 @@
+// 样式：packages/chat/src/chat/static/styles/02-controls.css（.model-chip / .tool-toggle）与 05-composer.css（.composer / .primary-button）
+// 窄屏（手机）覆盖统一在 06-responsive-overlay.css，改小屏表现去那里找。
 import React, { useEffect, useRef, useState } from "react";
 
 const TEMPERATURE_CHOICES = [0, 0.2, 0.5, 0.7, 1];

@@ -1,3 +1,5 @@
+// 样式：packages/chat/src/chat/static/styles/06-responsive-overlay.css（.picker-* / .modal）
+// 窄屏（手机）覆盖统一在 06-responsive-overlay.css，改小屏表现去那里找。
 import React, { useEffect, useState } from "react";
 
 import { browseDirectories } from "../api";

@@ -1,0 +1,119 @@
+/* ============================================================================
+ * 输入卡片与主按钮   （layer: composer）
+ * ----------------------------------------------------------------------------
+ * 对应组件：Composer.jsx
+ * 上游参照：ui-conversation/src/client/skeleton/InputBar.module.css、ui-primitives/src/Button.module.css
+ * 本表区块：输入卡片、主按钮
+ * ========================================================================== */
+
+@layer composer {
+
+/* ---------------------------------------------------------------------------
+ * 输入卡片
+ * 对应：Composer.jsx
+ * --------------------------------------------------------------------------
+ * 上游 InputBar 的浮动胶囊：r22、l2-darkmode-thin 描边、--dsw-specific-input-major
+ * 底色、lv2 阴影，宽 780px（= 正文 748 + 左右各 16）。
+ * 结构也照搬：textarea 在上，操作行在下（间距 12px），主按钮落在右下角。
+ * 原来那个「发送按钮绝对定位 + textarea 用 151px 右内边距躲开它」的写法
+ * 一并不用了 —— 那种写法要手工维护避让距离，改字号就会错位。
+ * ------------------------------------------------------------------------- */
+.composer {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: var(--dsh-composer-card-max-width);
+  margin: 0 auto 8px;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
+  border-radius: 22px;
+  background: var(--dsw-specific-input-major);
+  box-shadow: var(--dsw-shadow-lv2);
+  transition: border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+/* 聚焦描边用业务蓝，**不要**用 --dsw-alias-brand-primary。
+   坑在这里：brand-primary 在浅色下指向 neutral-bluish-1000，也就是近黑色
+   rgb(15,17,21)，上游拿它当输入框的聚焦色。一旦用它，点一下模型 chip、
+   菜单一展开，整张输入卡片的外框就会从浅灰 rgba(0,0,0,0.1) 跳成黑 ——
+   也就是「选模型的时候外框变黑」那个现象。
+   下面是两条一起用：
+     :focus-within  —— 光标在输入框里时变蓝
+     .is-menu-open  —— 菜单展开期间保持蓝（这个类由 JSX 挂）
+   只靠 :focus-within 不稳：点击按钮后浏览器是否把焦点移进按钮并不一致
+   （Safari 就不会把焦点给按钮），而菜单里的选项按钮一旦被点掉就从 DOM
+   移除，焦点会掉回 body，外框又闪回灰色。挂个显式状态最可靠。 */
+.composer:focus-within,
+.composer.is-menu-open {
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+.composer textarea {
+  width: 100%;
+  min-height: 72px;
+  max-height: 220px;
+  padding: 2px 4px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 16px;
+  line-height: 24px;
+  resize: none;
+}
+
+.composer textarea::placeholder {
+  color: var(--dsw-alias-label-dimmed);
+}
+
+/* 操作行：模型 chip 和发送按钮同属右侧簇，chip 在前、按钮在后 ——
+   上游 InputBar.module.css 的注释原话是 "model + send on the right"，
+   也就是你在界面上看到的「模型名在发送按钮左边」。 */
+.composer-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-height: 36px;
+}
+
+/* ---------------------------------------------------------------------------
+ * 主按钮
+ * 对应：Composer.jsx
+ * --------------------------------------------------------------------------
+ * 上游 Button md：36px 高、r18、左右 14px 内边距、14px/22px 字号。
+ * 底色 --dsw-alias-button-primary-fill，浅色下是近黑色（不是蓝色）；
+ * 悬停 --dsw-alias-button-primary-hover 变浅灰；
+ * 禁用只降透明度，**不改底色** —— 上游就是一条 opacity: 0.4。
+ * ------------------------------------------------------------------------- */
+.primary-button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 36px;
+  min-width: 0;
+  padding: 0 14px;
+  border: none;
+  border-radius: 18px;
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+  font-size: 14px;
+  line-height: 22px;
+  cursor: pointer;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+.primary-button:hover:not(:disabled) {
+  background: var(--dsw-alias-button-primary-hover);
+}
+
+.primary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+}

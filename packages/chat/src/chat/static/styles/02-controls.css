@@ -1,0 +1,439 @@
+/* ============================================================================
+ * 顶栏与控件   （layer: controls）
+ * ----------------------------------------------------------------------------
+ * 对应组件：App.jsx（顶栏、工具模式开关）、Composer.jsx（模型 chip + 菜单）、SystemPanel.jsx
+ * 上游参照：ui-primitives/src/Button.module.css、ui-model-selection/src/client/ModelSelect.module.css
+ * 本表区块：顶栏、按钮、模型 chip + 二级弹出菜单、工具模式开关、系统提示词面板
+ * ========================================================================== */
+
+@layer controls {
+/* ---------------------------------------------------------------------------
+ * 顶栏
+ * 对应：App.jsx
+ * --------------------------------------------------------------------------
+ * 对应上游 ConversationRoot 的 header：内容行 32px 高，底部一条分隔线。
+ * 这里放的是「标题 + 模型选择 + 三个操作」，比上游的会话头多几个控件，
+ * 所以留 8px 内边距让整条到 48px 左右，视觉比例和上游一致。
+ * ------------------------------------------------------------------------- */
+.header {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;            /* 窄屏（手机）时控件自动换行，不会横向溢出 */
+  align-items: center;
+  justify-content: flex-end;  /* 标题拿掉之后靠这个把控件推到右侧 */
+  gap: 4px;
+  min-height: 48px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+}
+
+/* ---------------------------------------------------------------------------
+ * 按钮
+ * 对应：App.jsx / Composer.jsx / ConfirmDialog.jsx / DirectoryPicker.jsx（共用）
+ * --------------------------------------------------------------------------
+ * 上游 Button 有两种尺寸：md = 36px 高 / r18（主操作），sm = 28px 高 / r14
+ * （密集行里的次操作）。顶栏里放的是次要操作，用 sm。
+ * 注意「主按钮」在上游是**近黑色胶囊**（--dsw-alias-button-primary-fill
+ * 指向 --dsw-alias-brand-primary，浅色下是 neutral-bluish-1000），
+ * 不是原来那种蓝色 #2563eb —— 这是跟 DSH 观感差别最大的一处。
+ * ------------------------------------------------------------------------- */
+.secondary-button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+.secondary-button:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* ---------------------------------------------------------------------------
+ * 模型 chip + 二级弹出菜单
+ * 对应：Composer.jsx
+ * --------------------------------------------------------------------------
+ * 结构：发送按钮左边一个灰色 chip 显示当前模型名，点开是「模型 / 温度」两格，
+ * 点「模型」进二级页按供应商分区列出模型，点「温度」进温度档位页。
+ *
+ * 规格照抄上游两处：
+ *   ModelSelect.module.css —— chip（28px/r24/13px-500）、菜单卡片、两格 cell
+ *   Menu.module.css        —— 菜单卡片材质（r12 / inverted 细描边 / shadow-lv3）
+ * 菜单向上弹（bottom: 100% + 8px）也是上游的写法：它挂在输入卡片底部，
+ * 往下弹会跑出屏幕。
+ * ------------------------------------------------------------------------- */
+.model-menu {
+  position: relative;      /* 给绝对定位的弹出层当坐标基准 */
+  display: inline-flex;
+  min-width: 0;
+}
+
+/* 触发 chip。这块样式原来挂在 .model-selector select 上（原生 <select>），
+   现在换成真正的 <button>，几何沿用，只是箭头改成用 CSS 边框画 ——
+   data URI 里的 SVG 读不到 currentColor，烘死颜色就跟着 token 走不了了，
+   用边框拼的箭头没这个问题。 */
+.model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 220px;
+  height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 24px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  cursor: pointer;
+  transition: background-color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+.model-chip:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.model-chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--dsw-alias-border-l3);
+}
+
+.model-chip:disabled {
+  color: var(--dsw-alias-label-dimmed);
+  cursor: default;
+}
+
+.model-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 跟在模型名后面的温度值：上游这个位置放的是 effort，用 caption 色 */
+.model-chip-temp {
+  flex: none;
+  color: var(--dsw-alias-label-caption);
+}
+
+/* 向下的小箭头，两条边框拼成（currentcolor，自动跟随 token 变色） */
+.model-chip-chevron {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  margin-top: -2px;
+  border-right: 1.5px solid currentcolor;
+  border-bottom: 1.5px solid currentcolor;
+  transform: rotate(45deg);
+}
+
+/* 弹出卡片：r12、inverted 细描边、--dsw-specific-menu 底色、shadow-lv3 */
+.model-popup {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 20;
+  width: min(240px, calc(100vw - 32px));
+  padding: 4px;
+  border: 1px solid var(--dsw-alias-border-inverted);
+  border-radius: 12px;
+  background: var(--dsw-specific-menu);
+  box-shadow: var(--dsw-shadow-lv3);
+  color: var(--dsw-alias-label-primary);
+  /* 浮层是高一级的表面，滚动条滑块跟着换到 l2 那一组 token */
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+}
+
+/* 菜单内容区。滚动放在这一层而不是 .model-popup 上：百分比 max-height 需要
+   父级有确定高度才算得出来，写在卡片上会失效；这里直接给一个跟视口挂钩的
+   上限，行为可预期。 */
+.model-pane {
+  display: flex;
+  flex-direction: column;
+  max-height: min(320px, 50vh);
+  overflow-y: auto;
+}
+
+/* 一级菜单的两格：左标签、右当前值、末尾一个「›」 */
+.model-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 40px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  line-height: 22px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.model-cell:hover,
+.model-cell:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.model-cell-label {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.model-cell-value {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-cell-chevron {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-top: 1.5px solid currentcolor;
+  border-right: 1.5px solid currentcolor;
+  color: var(--dsw-alias-label-tertiary);
+  transform: rotate(45deg);
+}
+
+/* 二级页顶部的「返回」。手机上没有 Esc 键，这个按钮是唯一的退路。 */
+.model-back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.model-back:hover,
+.model-back:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.model-back-arrow {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-bottom: 1.5px solid currentcolor;
+  border-left: 1.5px solid currentcolor;
+  transform: rotate(45deg);
+}
+
+.model-group + .model-group {
+  margin-top: 4px;
+}
+
+/* 分区标题（供应商名）。sticky 让它在自己那一段滚动时粘在顶部 —— 上游同款 */
+.model-group-title {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 5px 8px 3px;
+  background: var(--dsw-specific-menu);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
+.model-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.model-option:hover,
+.model-option:focus-visible {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.model-option-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 选中态不填色，只靠右侧那个对勾 —— 上游就是这么处理的
+   （ModelSelect.module.css 里 .selected 是空的）。这条留白是为了将来真要加
+   视觉时有个明确的地方下手；不建议改成整行填色，那样就跟 DSH 不一样了。 */
+.model-option.is-selected {
+  background: transparent;
+}
+
+.model-option-check {
+  display: grid;
+  flex: 0 0 18px;
+  place-items: center;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* ---------------------------------------------------------------------------
+ * 工具模式开关
+ * 对应：App.jsx
+ * --------------------------------------------------------------------------
+ * 上游没有 checkbox 组件，所以留原生控件，只对齐「行高 + 字号 + 强调色」：
+ * 28px 行高跟 chip、按钮同高，强调色取业务蓝（--dsw-alias-state-business-primary）
+ * 而不是主按钮那种近黑色 —— 勾选框太小，用近黑色会显得像禁用。
+ * ------------------------------------------------------------------------- */
+.tool-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+}
+
+.tool-toggle input {
+  accent-color: var(--dsw-alias-state-business-primary);
+  cursor: pointer;
+}
+
+.tool-toggle input:disabled {
+  cursor: not-allowed;
+}
+
+/*  系统提示词部分   */
+
+/* ---------------------------------------------------------------------------
+ * 系统提示词面板
+ * 对应：SystemPanel.jsx
+ * --------------------------------------------------------------------------
+ * 上游把这类「模块级设置区」放在 --dsw-alias-bg-module-platform（浅灰）上，
+ * 圆角 12px。宽度跟正文列同轴（748px 居中），展开/收起时正文不会横向跳动。
+ * ------------------------------------------------------------------------- */
+.system-panel {
+  flex: none;
+  width: 100%;
+  max-width: var(--dsh-chat-content-width);
+  margin: 12px auto 0;
+  padding: 12px 16px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-module-platform);
+}
+
+.system-panel-title {
+  display: flex;                    /* 让标题文字和「恢复默认」按钮横向并排 */
+  align-items: center;              /* 两者垂直居中对齐 */
+  justify-content: space-between;   /* 两端对齐：文字靠左，按钮靠右 */
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* 面板内的「恢复默认」小按钮
+   复用上游 Button 的 sm 尺寸（28px 高 / r14 / 12px 字），
+   跟顶栏那些次要按钮是同一套规格，视觉上自然成为一族。 */
+.link-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: nowrap;              /* 禁止「恢复默认」四个字被挤成两行 */
+  cursor: pointer;
+  transition: background var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+.link-button:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* disabled 状态由 JSX 里的 disabled={...} 控制，这里只负责「变灰」的视觉反馈 */
+.link-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* 面板里的输入框对齐上游 Input：32px 起步、r8、l2 描边，聚焦时描边转主线色 */
+.system-panel textarea {
+  width: 100%;
+  min-height: 108px;
+  padding: 7px 9px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  outline: none;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  line-height: 22px;
+  resize: vertical;
+  transition: border-color var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+/* 同上：这里原来也是 --dsw-alias-brand-primary（浅色下近黑）。
+   同一个页面里两处聚焦色应该一致，否则一边蓝一边黑很奇怪。 */
+.system-panel textarea:focus {
+  border-color: var(--dsw-alias-state-business-primary);
+}
+
+.system-panel-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+}

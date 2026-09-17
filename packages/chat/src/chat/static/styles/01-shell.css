@@ -1,0 +1,592 @@
+/* ============================================================================
+ * chat 应用样式表（DSH 对齐版）—— 第 1 张 / 共 6 张
+ * ----------------------------------------------------------------------------
+ * 本目录原本是一个 2000+ 行的单文件 styles.css。拆开是为了"改一个组件时能直接
+ * 找到它的规则"，不是为了隔离作用域 —— **类名仍然是全局的**（smoke 拿类名做
+ * 断言钩子，改成 CSS Modules 会让那套测试失效）。
+ *
+ * 颜色/阴影/字体一律走 theme.css 引入的 --dsw-* token，本目录不含任何硬编码
+ * 色值（箭头、对勾这些图形也用 CSS 边框拼，靠 currentcolor 跟着 token 走）。
+ *
+ * 几何参数不是拍脑袋来的，逐条对着上游抄：
+ *   Button（胶囊按钮）      packages/client/ui-primitives/src/Button.module.css
+ *   Input（输入框）         packages/client/ui-primitives/src/Input.module.css
+ *   模型选择器（chip）      packages/client/ui-model-selection/src/client/ModelSelect.module.css
+ *   用户气泡 / 正文列       packages/client/ui-conversation/src/client/chat/MessageItem.module.css
+ *   消息图标操作条          .../chat/MessageIconActions.module.css
+ *   输入卡片 / 正文宽度轴   .../skeleton/{InputBar,ConversationRoot}.module.css
+ *   工具行 / 展开行         packages/client/ui-tool + ui-primitives/src/DisclosureRow.module.css
+ *   「正在思考」扫光        .../chat/ChatView.module.css(.turnStatus)
+ *
+ * 想微调外观时，**改 token 不要改这里**：token 一改，将来能整体跟着上游走；
+ * 这里写死的像素，改了就跟上游脱钩了。
+ *
+ * ----------------------------------------------------------------------------
+ * 六张表与它们负责的组件（反向也成立：组件头部注释里写了它依赖哪些 class）：
+ *   01-shell.css              外壳 + 侧栏                       App.jsx / SessionSidebar.jsx
+ *   02-controls.css           顶栏 + 按钮 + chip + 开关 + 提示词  App.jsx / Composer.jsx / SystemPanel.jsx
+ *   03-conversation.css       正文列 + 消息 + 气泡 + Markdown      MessageList.jsx / MarkdownContent.jsx
+ *   04-tools.css              工具步骤 + 审批面板                 MessageList.jsx / BashApprovalPanel.jsx
+ *   05-composer.css           输入卡片 + 主按钮                   Composer.jsx
+ *   06-responsive-overlay.css 窄屏 + 弹窗                         DirectoryPicker.jsx / ConfirmDialog.jsx
+ *
+ * 每个区块的注释里也标了「对应：<组件文件>」，两个方向都能查到。
+ * ========================================================================== */
+
+/* 层顺序**在这里定**，与 <link> 的先后无关：CSS 里层序优先于特异性，所以顺序
+ * 写死之后，调整 index.html 里 <link> 的次序不会再悄悄改变外观。
+ *
+ * 一个必须知道的规则：**未分层的样式永远赢过分层里的样式**（同样优先于特异性）。
+ * theme.css 是上游逐字拷贝、不分层，所以它对同一元素同一属性的声明会压过本目录。
+ * 已核对过双方没有这种冲突：theme 只在 body/:root 上声明 token 与 font-family，
+ * 在 button/input/select/textarea 上声明 font-family: inherit（本目录里唯一命中的
+ * 元素选择器 .picker-create input 也是同一个值），另外还有滚动条伪元素。
+ * 往 theme.css 之上加规则时请留意这一点。 */
+@layer shell, controls, conversation, tools, composer, responsive;
+
+@layer shell {
+/* ---------------------------------------------------------------------------
+ * 外壳：全高应用框架
+ * 对应：App.jsx
+ * --------------------------------------------------------------------------
+ * 原来是「页面里放一张居中卡片」；现在跟 DSH 一样是占满视口的纵向三段式：
+ * 顶栏（不滚）→ 正文（自己滚）→ 输入卡片（不滚）。
+ * 滚动交给正文区而不是整页，这样顶栏和输入框在长对话里始终在位。
+ * ------------------------------------------------------------------------- */
+.page {
+  display: flex;
+  height: 100%;
+  margin: 0;
+}
+
+/* ===========================================================================
+ * 侧栏：工作区 + 会话历史
+ * 对应：SessionSidebar.jsx
+ * ---------------------------------------------------------------------------
+ * 数值全部取自 DSH 上游，不是估的：
+ *   宽 280px            ui-layout/src/client/columns.ts 的 SIDEBAR_DEFAULT
+ *   收起 56px           columns.ts 的 SIDEBAR_COLLAPSED
+ *   padding 6px 12px    ui-sidebar 的 SidebarRoot.module.css（--dsh-sidebar-inline-padding）
+ *   背景 specific-sidebar-fill；字号 14px；滚动条换 l2 那一组 token
+ *   标题行 60px / padding 8px 0 8px 4px / margin-bottom 8px（上游的 logoRow）
+ *   新对话 38px 高 / 圆角 12px / 1px 边框 / button-elevated-fill，hover 换 floating-hover
+ *   图标按钮 28×28 圆形、label-secondary 墨色；收起的 rail 里 36×36、换 primary 墨色
+ *   会话行圆角 8px、padding 0 8px；标题 14/20、次要信息 12px 用 label-tertiary
+ *     （ui-workspace 的 rows/Rows.module.css）
+ *   窄于 1024px 自动收起（上游 SIDEBAR_AUTO_COLLAPSE）
+ * ======================================================================== */
+
+.sidebar {
+  --dsh-sidebar-inline-padding: 12px;
+  position: relative;         /* 底部渐隐层的定位基准 */
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  width: 280px;
+  height: 100%;
+  padding: 6px var(--dsh-sidebar-inline-padding);
+  box-sizing: border-box;
+  background: var(--dsw-specific-sidebar-fill);
+  border-right: 1px solid var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-primary);
+  font-size: 14px;
+  /* 侧栏浮在对话面之上，滚动条滑块用 l2 那一对 */
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+}
+
+/* 收起后缩成一条窄条（上游的 SIDEBAR_COLLAPSED）—— 收起不等于消失，
+   展开按钮留在原地，不用去别处找入口。rail 的内边距也是上游那组。 */
+.sidebar.is-collapsed {
+  width: 56px;
+  padding: 18px 10px 6px;
+  align-items: flex-start;
+}
+
+/* 上游的 logoRow：60px 高，控件靠右，底部留 8px。 */
+.sidebar-head {
+  position: relative;         /* 工作区弹出菜单的定位基准 */
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  height: 60px;
+  padding: 8px 0 8px 4px;
+  margin-bottom: 8px;
+  box-sizing: border-box;
+}
+
+.sidebar-workspace-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  padding-left: 8px;
+}
+
+.sidebar-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sidebar-toggle:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.sidebar.is-collapsed .sidebar-toggle {
+  width: 36px;
+  height: 36px;
+  color: var(--dsw-alias-label-primary);
+}
+
+/* 行内操作按钮（组头右侧那两个）。
+ *
+ * 这里踩过一个坑，写下来免得再犯：buttons 是**由容器**决定显隐的
+ * （.group-actions 默认 display:none，组头 hover 才 inline-flex），
+ * 所以按钮自己必须是 inline-flex 常态。原先照抄上游时把 display:none 抄到了
+ * 按钮上，只有 `.workspace-option:hover .row-action` 这一条负责显示 —— 而
+ * .workspace-option（旧的工作区下拉菜单）已经不在了。结果：容器被 hover 出来，
+ * 里面的按钮却永远 display:none，删除工作区的入口**连 hover 都看不见**。
+ * 抄上游要连"谁控制显隐"一起抄，只抄数值就会这样。 */
+.row-action {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-right: 6px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.row-action:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.new-session-button {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 38px;
+  padding: 8px 16px;
+  margin: 0 2px 8px;
+  box-sizing: border-box;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-button-elevated-fill);
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+  cursor: pointer;
+}
+
+.new-session-button:hover {
+  background: var(--dsw-alias-button-floating-hover);
+}
+
+/* 区块头（上游 WorkspaceBrowser 的 sectionHeader）：36px、右对齐、gap 4，
+   左边留 4、右边出血 4，圆角 12 且 overflow hidden —— 后面那些 max-width 过渡
+   要靠这个裁切才不至于溢出。 */
+.section-header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  height: 36px;
+  padding-left: 4px;
+  margin-top: 2px;
+  margin-right: -4px;
+  margin-bottom: 4px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 标签被搜索挤走：收 max-width + 淡出，不是 display:none。
+   收 max-width 才有过渡，display 是瞬变。 */
+.section-label {
+  flex: none;
+  max-width: 45%;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  line-height: 20px;
+  transition:
+    max-width 180ms var(--ds-ease-in-out),
+    opacity 120ms var(--ds-ease-in-out),
+    visibility 0s linear;
+}
+
+.section-label.is-hidden {
+  max-width: 0;
+  margin-right: -4px;
+  opacity: 0;
+  visibility: hidden;
+  transition-delay: 0s, 0s, 180ms;
+}
+
+/* 搜索槽：收起时只占一个 28px 圆钮的宽度，展开时吃掉整行。 */
+.section-search-slot {
+  flex: 1;
+  max-width: 28px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  overflow: hidden;
+  transition: max-width 180ms var(--ds-ease-in-out);
+}
+
+.section-search-slot.is-expanded {
+  max-width: 100%;
+}
+
+.section-search-input {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+  height: 28px;
+  padding: 0 2px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 13px;
+  /* 收起时不可点也不可见，避免 Tab 停在看不见的输入框上 */
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms var(--ds-ease-in-out);
+}
+
+.section-search-slot.is-expanded .section-search-input {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.section-search-input::placeholder {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.section-clear-button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.section-clear-button:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* 右侧动作簇（上游的 headerActions）：搜索展开时整体收起让位。 */
+.section-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 60px;
+  overflow: hidden;
+  transition:
+    max-width 180ms var(--ds-ease-in-out),
+    opacity 120ms var(--ds-ease-in-out);
+}
+
+.section-actions.is-hidden {
+  max-width: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.section-icon-button {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.section-icon-button:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.section-icon-button:disabled {
+  cursor: default;
+}
+
+/* 列表底部渐隐（上游的 fade）：24px 渐变覆盖层，滚到底时最后一行淡出，
+   而不是被硬切一刀。只是视觉层，所以关掉指针事件。 */
+.session-list-fade {
+  position: absolute;
+  left: var(--dsh-sidebar-inline-padding);
+  right: var(--dsh-sidebar-inline-padding);
+  bottom: 6px;
+  height: 24px;
+  background: linear-gradient(to bottom, transparent, var(--dsw-specific-sidebar-fill));
+  pointer-events: none;
+}
+
+/* 工作区分组（对齐上游 sidebar 的 groupBy=workspace）：一个组头 + 它下面的会话。
+   当前工作区的文件夹图标走 state-business-primary —— 上游 rows 的 folderActive
+   就是这个颜色，不额外发明标记。 */
+.group + .group {
+  margin-top: 4px;
+}
+
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 8px;
+  border-radius: 8px;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.group-header:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+/* 整行是按钮（上游 projectRow：行本身是开关），图标只是它的第一个孩子。 */
+.group-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.group-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.group-header.is-current .group-icon {
+  color: var(--dsw-alias-state-business-primary);
+}
+
+.group-actions {
+  flex: none;
+  display: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.group-header:hover .group-actions {
+  display: inline-flex;
+}
+
+.group-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.group-header.is-current .group-name {
+  color: var(--dsw-alias-label-primary);
+}
+
+.group-count {
+  flex: none;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 组头 hover 时才对调：数字让位给删除按钮（上游行内操作的做法）。 */
+.group-header:hover .group-count {
+  display: none;
+}
+
+/* 没有 hover 的设备（手机/平板）上，hover 出来的动作等于不存在 —— 而这位聊天
+   服务在局域网上是会被手机访问的。所以触屏上让它们常驻，别把删除入口锁死在
+   :hover 里。 */
+@media (hover: none) {
+  .group-actions,
+  .session-actions {
+    display: inline-flex;
+  }
+}
+
+.group .session-row {
+  padding-left: 34px;        /* 缩进一级，一眼看出属于哪个工作区 */
+}
+
+.sidebar-error {
+  flex: none;
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-state-business-primary);
+}
+
+/* 会话列表。左右负外边距抵消侧栏内边距，让滚动条贴到侧栏边缘（上游 regionArea 的做法）。
+   scrollbar-gutter: stable 是关键：占位一直留着，滚动条出现/消失时行不会左右跳。
+   padding-bottom 给底部渐隐层留出位置，滚到底时最后一行落在渐变之上。 */
+.session-list {
+  flex: 1;
+  min-height: 0;              /* flex 子项默认 min-height:auto 会撑破容器 */
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-left: -4px;
+  margin-right: calc(-1 * var(--dsh-sidebar-inline-padding));
+  padding-left: 4px;
+  padding-right: 0;
+  padding-bottom: 16px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+/* 会话行：主按钮（点=切过去）+ 右侧删除动作。
+   外层是 div 不是 button —— button 不能再套 button（HTML 不允许），
+   而这一行现在既有"切过去"又有"删掉"，必须是两个按钮。结构照搬组头。 */
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: 8px;
+}
+
+.session-row:hover,
+.session-row.is-active {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.session-item {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* 删除动作跟组头一样：hover 才出现，不占常驻位置。当前这场对话也显示 ——
+   你正看着的那场，最可能就是你想删的那场。 */
+.session-actions {
+  flex: none;
+  display: none;
+  align-items: center;
+}
+
+.session-row:hover .session-actions,
+.session-row.is-active .session-actions {
+  display: inline-flex;
+}
+
+.session-item-title {
+  font-size: 14px;
+  line-height: 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-item-meta {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.session-empty {
+  padding: 8px;
+  font-size: 13px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+/* 上游在这个断点把侧栏收成 56px 的控制 rail；这里没有 rail，先直接隐藏。
+   （已知缺口：窄屏下也就点不到会话列表了，等真有需要再做抽屉或 rail。） */
+@media (max-width: 1024px) {
+  .sidebar {
+    display: none;
+  }
+}
+
+.card {
+  flex: 1;
+  min-width: 0;               /* 不加的话内部长内容会把这一列顶宽，挤掉侧栏 */
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;              /* flex 子项默认 min-height:auto 会撑破容器，必须归零 */
+  padding: 0 var(--dsh-composer-side-clearance);
+  background: var(--dsw-alias-bg-base);
+}
+
+}

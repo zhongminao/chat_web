@@ -1,0 +1,250 @@
+/* ============================================================================
+ * 窄屏适配与弹窗   （layer: responsive）
+ * ----------------------------------------------------------------------------
+ * 对应组件：全局（各组件共用）；DirectoryPicker.jsx、ConfirmDialog.jsx
+ * 上游参照：ui-conversation 的窄屏断点、ui-primitives 的 Modal/ConfirmDialog
+ * 本表区块：窄屏（手机）、弹窗（目录选择器）
+ * ========================================================================== */
+
+@layer responsive {
+/* ---------------------------------------------------------------------------
+ * 窄屏（手机）
+ * 对应：全部组件（断点覆盖）
+ * --------------------------------------------------------------------------
+ * 顶栏换成两行：第一行标题，第二行控件。
+ * 模型选择已经不在顶栏了（挪到输入卡片的 chip 上），所以这里只管 chip 的宽度
+ * ——窄屏下操作行还要放发送按钮，chip 太长会把按钮挤出去。
+ * ------------------------------------------------------------------------- */
+@media (max-width: 720px) {
+  .header {
+    gap: 6px;
+  }
+
+  .model-chip {
+    max-width: 150px;
+  }
+
+  .bubble {
+    font-size: 15px;
+    line-height: 26px;
+  }
+
+  .user-bubble {
+    max-width: 90%;
+  }
+
+  .chat-box {
+    padding: 12px calc(var(--dsh-composer-side-clearance) + 8px);
+  }
+}
+
+/* ===========================================================================
+ * 弹窗（目录选择器）
+ * 对应：DirectoryPicker.jsx / ConfirmDialog.jsx
+ * ---------------------------------------------------------------------------
+ * 上游的目录选择走 ui-directory-picker 两个包；这里做最小可用版，所以样式也
+ * 从简：遮罩 + 一块面板 + 两行按钮。表面 token 与 .model-popup 同一套。
+ * ======================================================================== */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 32%);
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: min(460px, calc(100vw - 32px));
+  max-height: min(560px, calc(100vh - 64px));
+  padding: 16px;
+  border: 1px solid var(--dsw-alias-border-inverted);
+  border-radius: 16px;
+  background: var(--dsw-specific-menu);
+  box-shadow: var(--dsw-shadow-lv3);
+  color: var(--dsw-alias-label-primary);
+}
+
+.modal-title {
+  flex: none;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 22px;
+}
+
+.picker-path {
+  flex: none;
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;             /* 省略开头，末端目录名才要紧 */
+  text-align: left;
+}
+
+.picker-list {
+  flex: 1;
+  min-height: 160px;
+  margin-top: 10px;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  scrollbar-gutter: stable;
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+}
+
+.picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 14px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.picker-row:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.picker-row-icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.picker-row-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-empty {
+  padding: 12px 8px;
+  font-size: 13px;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.modal-error {
+  flex: none;
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-state-business-primary);
+}
+
+/* 确认框的正文。跟目录选择器共用 .modal 材质，只多这一段说明文字。 */
+.modal-body {
+  flex: none;
+  margin-top: 8px;
+  font-size: 14px;
+  line-height: 22px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* 危险动作按钮（删对话 / 删工作区）。数值照抄上游
+ * ui-settings-models/ModelsSection.module.css 的 .dangerButton —— 不是自己配的红色：
+ * 上游的危险按钮是**透明底 + 红字**，hover 才上一层极淡的红
+ * （--dsw-alias-interactive-bg-hover-danger），不是一整块实心红按钮。 */
+.danger-button {
+  flex: none;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 36px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 18px;
+  background: transparent;
+  color: var(--dsw-alias-state-error-primary);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 22px;
+  cursor: pointer;
+}
+
+.danger-button:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-danger);
+}
+
+.danger-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* 左下角放"新建工作区"，右下角放取消/确认 —— 两类动作分开摆，
+   免得"建一个新的"和"就要这个"挨在一起被误点。
+
+   .secondary-button 是 sm 档（28px 高 / 12px 字 / r14），.primary-button 是 md 档
+   （36px / 14px / r18）—— 直接并排就是"一高一低"。上游按钮的尺寸是**档位**不是零散
+   数值，弹窗动作栏里两个按钮属于同一档（都按 md），所以这里整套换成 md：只统一高度
+   会把字号和圆角落下，一样看着是两种按钮。 */
+.modal-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.modal-actions-left,
+.modal-actions-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modal-actions .secondary-button,
+.modal-actions .primary-button,
+.modal-actions .danger-button {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 18px;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.picker-create {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.picker-create input {
+  width: 170px;
+  height: 36px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: var(--dsw-alias-button-elevated-fill);
+  color: var(--dsw-alias-label-primary);
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
+}
+
+}

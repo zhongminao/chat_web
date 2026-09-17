@@ -1,0 +1,362 @@
+/* ============================================================================
+ * 工具步骤与审批面板   （layer: tools）
+ * ----------------------------------------------------------------------------
+ * 对应组件：MessageList.jsx（.tool-step / .tool-running / .plan-panel / .item-unknown）、BashApprovalPanel.jsx
+ * 上游参照：ui-tool + ui-primitives/src/DisclosureRow.module.css、PlanPanel
+ * 本表区块：工具执行步骤、未知条目、计划面板、正在执行、Bash 审批面板
+ * ========================================================================== */
+
+@layer tools {
+/* ===== 工具执行步骤气泡 ===== */
+
+/* ---------------------------------------------------------------------------
+ * 工具执行步骤
+ * 对应：MessageList.jsx
+ * --------------------------------------------------------------------------
+ * 上游的工具行是「16px 图标 + 6px 间隙 + 14px 标题 + 分隔点 + 摘要」的
+ * 单行结构（DisclosureRow / ToolRow），收起时只占 24px —— 工具调用在
+ * DSH 里是**一条很轻的行**，不是一个大块。
+ * 这里沿用 <details>/<summary> 原生结构（不重造展开逻辑），
+ * 只把 summary 那行的字体、行高、颜色对齐过去。
+ * ------------------------------------------------------------------------- */
+.tool-step {
+  width: 100%;
+}
+
+/* 服务端给了一个前端不认识的 kind。要显眼 —— 它是"版本不匹配"的信号，
+ * 不是内容的一部分，所以用告警色而不是普通正文色。 */
+.item-unknown {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 13px;
+  font-style: italic;
+}
+
+.plan-panel {
+  flex: none;
+  width: 100%;
+  max-width: var(--dsh-composer-card-max-width);
+  margin: 0 auto 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 14px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.plan-panel-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 24px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 22px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.plan-panel-summary::-webkit-details-marker {
+  display: none;
+}
+
+.plan-panel-summary::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  margin-right: 8px;
+  border-right: 1.5px solid currentcolor;
+  border-bottom: 1.5px solid currentcolor;
+  transform: rotate(-45deg);
+  transition: transform var(--ds-transition-duration-fast) var(--ds-ease-in-out);
+}
+
+.plan-panel[open] .plan-panel-summary::before {
+  transform: rotate(45deg);
+}
+
+.plan-panel-summary span:first-child {
+  flex: 1 1 auto;
+}
+
+.plan-panel-count {
+  flex: none;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.plan-list {
+  display: grid;
+  gap: 4px;
+  padding-top: 6px;
+}
+
+.plan-item {
+  display: grid;
+  grid-template-columns: 12px minmax(0, 1fr) 52px;
+  gap: 8px;
+  align-items: start;
+  min-height: 24px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 13px;
+  line-height: 22px;
+}
+
+.plan-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
+  margin-top: 5px;
+  border: 1.5px solid var(--dsw-alias-label-tertiary);
+  border-radius: 50%;
+  color: var(--dsw-alias-label-primary-foreground);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.plan-item.in_progress .plan-dot {
+  border-color: var(--dsw-static-deepseek-500);
+  background: var(--dsw-static-deepseek-500);
+  animation: tool-running-pulse 1.2s ease-in-out infinite;
+}
+
+.plan-item.completed .plan-dot {
+  border-color: var(--dsw-static-deepseek-500);
+  background: var(--dsw-static-deepseek-500);
+}
+
+.plan-content {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.plan-item.completed .plan-content {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.plan-status {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.plan-item.in_progress .plan-status {
+  color: var(--dsw-static-deepseek-500);
+}
+
+/* 正在执行的那个工具。和跑完的 .tool-step 刻意长得不一样：那个是可折叠的流水账
+ * （灰色的、点开看输出），这个是**当下**的状态，所以要抢眼一点、不能点开。
+ * 用一个呼吸的圆点表示"还在动" —— 静态文字在一段几十秒的等待里会被误读成卡住。 */
+.tool-running {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 14px;
+  line-height: 24px;
+}
+
+.tool-running-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--dsw-static-deepseek-500);
+  animation: tool-running-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes tool-running-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(0.8); }
+  50%      { opacity: 1;    transform: scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-running-dot { animation: none; opacity: 0.8; }
+}
+
+.tool-step summary {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 14px;
+  line-height: 24px;
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+/* 去掉 Chrome/Safari 默认的三角，换成上游那种细描边小箭头 */
+.tool-step summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-step summary::after {
+  width: 6px;
+  height: 6px;
+  margin-left: 8px;
+  border-right: 1.5px solid currentcolor;
+  border-bottom: 1.5px solid currentcolor;
+  content: '';
+  opacity: 0.8;
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+
+.tool-step[open] summary::after {
+  transform: rotate(45deg);
+}
+
+.tool-step summary:hover {
+  color: var(--dsw-alias-label-primary);
+}
+
+.tool-step summary:focus-visible {
+  outline: 1.5px solid var(--dsw-alias-button-info-fill);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+/* 执行结果用上游的代码块底色 + 等宽字体（--ds-font-family-code 来自
+   theme/base.css；它刻意不带裸 monospace 尾巴，否则 Windows 下的中文
+   会掉进 SimSun）。 */
+.tool-step pre {
+  margin: 6px 0 2px;
+  max-height: 240px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-markdown-code-block);
+  color: var(--dsw-alias-label-secondary);
+  font-family: var(--ds-font-family-code);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* 待审批的 bash 请求**不在对话流里渲染任何东西** —— 审批只在输入端（下面的审批
+ * 面板）发生，跑完之后才作为普通 .tool-step 出现在对话里。所以这里没有
+ * ".bash-request" 一族样式：那些是它当初还是对话流卡片时留下的，已随卡片一起删掉。 */
+
+/* ===== Bash 审批面板（DSH 式 composer-takeover）===== */
+
+.bash-approval-root {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 16px 12px;
+}
+
+.bash-approval-card {
+  overflow: hidden;
+  width: 100%;
+  max-width: var(--dsh-chat-content-width, 760px);
+  border: 1px solid var(--dsw-alias-state-warn-secondary);
+  border-radius: 20px;
+  background: var(--dsw-specific-input-major, var(--dsw-alias-bg-primary));
+  box-shadow: var(--dsw-shadow-lv2, none);
+}
+
+.bash-approval-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--dsw-alias-state-warn-tertiary);
+  color: var(--dsw-alias-state-warn-primary);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.bash-approval-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dsw-alias-state-warn-primary);
+  animation: tool-running-pulse 1.2s ease-in-out infinite;
+}
+
+.bash-approval-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  box-sizing: border-box;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 12px 16px 0;
+}
+
+.bash-approval-headline {
+  color: var(--dsw-alias-label-primary);
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 24px;
+}
+
+.bash-approval-cwd {
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.bash-approval-command {
+  color: var(--dsw-alias-label-tertiary);
+  font-family: var(--ds-font-family-code);
+  font-size: 13px;
+  line-height: 20px;
+  word-break: break-all;
+  white-space: pre-wrap;
+}
+
+.bash-approval-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 14px 16px;
+}
+
+.bash-approval-reject,
+.bash-approval-allow {
+  min-height: 32px;
+  padding: 0 16px;
+  border-radius: 16px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 30px;
+}
+
+.bash-approval-reject {
+  border: 1px solid var(--dsw-alias-border-l1);
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+}
+
+.bash-approval-reject:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-danger);
+  color: var(--dsw-alias-state-error-primary);
+  border-color: transparent;
+}
+
+.bash-approval-allow {
+  border: 1px solid transparent;
+  background: var(--dsw-static-deepseek-500, var(--dsw-alias-button-info-fill));
+  color: #fff;
+}
+
+.bash-approval-allow:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.bash-approval-reject:disabled,
+.bash-approval-allow:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+}

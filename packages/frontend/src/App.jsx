@@ -1,3 +1,5 @@
+// 样式：packages/chat/src/chat/static/styles/01-shell.css（.page / .card）与 02-controls.css（.header / .tool-toggle）
+// 窄屏（手机）覆盖统一在 06-responsive-overlay.css，改小屏表现去那里找。
 import React, { useEffect, useRef, useState } from "react";
 
 import {

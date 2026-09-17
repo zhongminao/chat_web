@@ -582,9 +582,18 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
     //
     // jsdom 不算外部样式表的布局，测不出"能不能看见"，所以退一步查样式表**文本**：
     // 保护的是"按钮被一条无条件 display:none 按死"这个具体错误。
-    const css = readFileSync(new URL("../chat/src/chat/static/styles.css", import.meta.url), "utf-8");
+    //
+    // 样式表拆成 6 张之后这里改成**从 index.html 里读链接列表**，而不是写死路径：
+    // 那样加/删/重命名一张表时断言跟着走，不会悄悄测一个已经不存在的文件。
+    const appCss = [...html.matchAll(/<link[^>]+href="\/static\/([^"]+\.css)"/g)]
+      .map((m) => m[1])
+      .map((href) => readFileSync(new URL(href, STATIC_DIR), "utf-8"))
+      .join("\n");
+    check("index.html 里的样式表都读得到（含拆分后的 6 张）",
+          appCss.length > 2000 && appCss.includes(".message-action"),
+          `实得 ${appCss.length} 字符`);
     // 注释要先剥掉：断言的是"没有这条规则"，而注释里正好会提到那个旧选择器。
-    const cssRules = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    const cssRules = appCss.replace(/\/\*[\s\S]*?\*\//g, "");
     const rowActionBlock = cssRules.match(/\.row-action\s*\{([^}]*)\}/);
     check("行内操作按钮不再自带 display:none（曾把删除入口按死）",
           !!rowActionBlock && !/display:\s*none/.test(rowActionBlock[1]),

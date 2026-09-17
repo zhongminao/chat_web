@@ -1,3 +1,5 @@
+// 样式：packages/chat/src/chat/static/styles/06-responsive-overlay.css（.modal / .danger-button）
+// 窄屏（手机）覆盖统一在 06-responsive-overlay.css，改小屏表现去那里找。
 import React from "react";
 
 // 危险操作的确认框。存在的理由：删对话 / 删工作区都会**真的删掉日志文件**，

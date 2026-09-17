@@ -1,0 +1,425 @@
+/* ============================================================================
+ * 对话区（正文列 / 消息 / 气泡 / Markdown 渲染）   （layer: conversation）
+ * ----------------------------------------------------------------------------
+ * 对应组件：MessageList.jsx、MarkdownContent.jsx
+ * 上游参照：ui-conversation/src/client/chat/{MessageItem,MessageIconActions,ChatView}.module.css
+ * 本表区块：正文区（滚动容器）、空会话的首页、消息行、消息操作条（复制）、气泡、Markdown、正在思考扫光
+ * ========================================================================== */
+
+@layer conversation {
+/* ---------------------------------------------------------------------------
+ * 正文区（滚动容器）
+ * 对应：App.jsx
+ * --------------------------------------------------------------------------
+ * 上游的做法是「滚动条铺满 + 内容列居中」：滚动条贴窗口边，正文列 748px
+ * 居中。这里不加包裹层也做到了同一件事 —— 容器自己滚、每行各自
+ * max-width + margin auto 居中。
+ * 左右内边距 32px = 输入卡片的 16px 间隙 + 16px，这样正文列永远正好比
+ * 输入卡片窄 32px，「垫在下面」的关系在窄屏下也成立。
+ * ------------------------------------------------------------------------- */
+.chat-box {
+  flex: 1 1 auto;
+  min-height: 0;              /* 同上：不归零就滚不起来 */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px calc(var(--dsh-composer-side-clearance) + 16px) 16px;
+  /* 滚到底部时给输入卡片留出呼吸位；实际高度由下方 .composer 的 margin 配合 */
+  scroll-padding-bottom: 16px;
+}
+
+/* ---------------------------------------------------------------------------
+ * 空会话的首页（纯 CSS 实现，没有动 JSX）
+ * 对应：App.jsx
+ * --------------------------------------------------------------------------
+ * 把外面那张卡片去掉之后，没消息时会剩下大片纯白，看起来像「页面坏了」。
+ * 上游对应的是 HeroShell：标题 26px/32、字重 500、主文字色，整块在
+ * 780px 宽的栈里居中。
+ * 这里用 :empty 判断空态 —— 一条消息都没有、也不在等待时，
+ * 用一个伪元素画出标题，不占用真实 DOM，也不需要新增状态。
+ * 注意 :empty 要求元素里连空白文本节点都没有；当前 JSX 在无消息且
+ * isLoading 为 false 时确实什么都不渲染，条件是成立的。
+ *
+ * 曾经这里还有第二行 ::after「按 Enter 发送，Shift + Enter 换行」，
+ * 已删除：输入框的 placeholder 写的就是同一句话，在同一屏里重复两遍是废话。
+ * 操作提示离操作本身越近越好，所以留下 placeholder 那一份。
+ * ------------------------------------------------------------------------- */
+.chat-box:empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-box:empty::before {
+  content: '有什么可以帮你的吗？';
+  color: var(--dsw-alias-label-primary);
+  font-size: 26px;
+  font-weight: 500;
+  line-height: 32px;
+  text-align: center;
+}
+
+/* ---------------------------------------------------------------------------
+ * 消息行
+ * 对应：MessageList.jsx
+ * --------------------------------------------------------------------------
+ * 上游正文列的节奏是「行间距统一 16px」。
+ *
+ * 每行现在只有一个气泡 —— 说话人靠对齐（user 右 / assistant 左）和气泡样式区分，
+ * 不再有「我：/ 助手：」标签。以前那两个标签是用 color:transparent 藏起来的
+ * （界面看不见、复制时带上），现在连元素一起删了，所以 gap 用不上，留着只为
+ * 将来行内还要再放东西。
+ * ------------------------------------------------------------------------- */
+.message-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  /* 气泡与它下面的操作条之间 6px —— 上游 user 侧的 actions gap 就是 6。 */
+  gap: 6px;
+  width: 100%;
+  max-width: var(--dsh-chat-content-width);
+  margin: 0 auto 16px;
+}
+
+/* ---------------------------------------------------------------------------
+ * 消息操作条（复制）
+ * 对应：MessageList.jsx
+ * --------------------------------------------------------------------------
+ * 数值逐条对上游 ui-conversation/src/client/chat/MessageIconActions.module.css：
+ *   .actions   flex / align-center / gap 10 / height 28
+ *   .action    28×28、padding 6、圆角 28px、透明底、label-tertiary 色；
+ *              悬停 interactive-bg-hover 底 + label-secondary 色
+ *
+ * 位置也对上游：**在气泡下面**，不在右上角浮着。user 侧是「气泡 + 操作条」
+ * 右对齐的竖列（gap 6）；assistant 侧是正文 footer（margin-top 16 + 左移 6，
+ * 那次左移是光学对齐 —— 28px 的点击区比字形宽出 6px）。
+ *
+ * 一直可见，不靠悬停显示：上游也是「icons stay visible when mounted」，
+ * 靠悬停才出现的是时间戳那种次要信息。而且触屏根本没有 hover。
+ * ------------------------------------------------------------------------- */
+.message-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 28px;
+}
+
+/* assistant 侧的 footer 偏移。user 侧吃 .message-row 的 gap: 6px，不用额外加。 */
+.message-row:not(.user-row) .message-actions {
+  margin-top: 10px;   /* 与 row 的 gap 6 相加 = 上游的 16px */
+  margin-left: -6px;  /* 光学对齐：把 28px 点击区里多出的 6px padding 抵掉 */
+}
+
+.message-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 6px;
+  border: none;
+  border-radius: 28px;
+  background: transparent;
+  color: var(--dsw-alias-label-tertiary);
+  cursor: pointer;
+}
+
+.message-action:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+}
+
+/* 与上游的**唯一**出入：`writeClipboard` 失败时上游静默（不声称成功），这里额外
+   染成错误色。本服务是纯 HTTP，手机那个 origin 没有 clipboard API，只能走
+   execCommand 回退，两条路都可能不通 —— "点了没反应"是这里最该避免的状态。 */
+.message-action.is-failed,
+.message-action.is-failed:hover {
+  background: transparent;
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.message-row:last-child {
+  margin-bottom: 0;
+}
+
+.user-row {
+  align-items: flex-end;
+}
+
+/* ---------------------------------------------------------------------------
+ * 气泡
+ * 对应：MessageList.jsx
+ * --------------------------------------------------------------------------
+ * 这里有两个方向要分开说：
+ *
+ * 助手侧：上游**不用气泡**。模型输出就是一段无边框正文，直接铺在 748px
+ *   正文列上（16px/28px）。原来那种白底描边圆角气泡会让模型回答显得
+ *   「像一条评论」，去掉之后阅读体验更接近 DSH。
+ *
+ * 用户侧：上游是浅蓝圆角块（--dsw-specific-bubble = deepseek-50），
+ *   r22、左右 16px / 上下 10px 内边距、16px/24px 行高，右对齐且最宽
+ *   525px 或父级 82%。原来那种深色气泡换成浅蓝色，是观感差别最大的
+ *   另一处（和主按钮由蓝转黑并列）。
+ * ------------------------------------------------------------------------- */
+.bubble {
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--dsw-alias-label-primary);
+  font-size: 16px;
+  line-height: 28px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;    /* 长 URL / 无空格长串不撑破列 */
+}
+
+.user-bubble {
+  max-width: min(525px, 82%);
+  padding: 10px 16px;
+  border-radius: 22px;
+  background: var(--dsw-specific-bubble);
+  line-height: 24px;
+}
+
+.markdown-content {
+  white-space: normal;
+}
+
+.markdown-content > :first-child {
+  margin-top: 0;
+}
+
+.markdown-content > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-content p,
+.markdown-content ul,
+.markdown-content ol,
+.markdown-content blockquote,
+.markdown-content pre,
+.markdown-content .markdown-table-wrap,
+.markdown-content .markdown-code-frame,
+.markdown-content .markdown-math-block {
+  margin: 0 0 12px;
+}
+
+/* 行间公式：不排版数学（没引 KaTeX），只是**原样**摆出来。
+ * 用等宽字体是为了让它一眼看出"这是一块公式"，而不是被当成普通正文读过去。
+ * white-space: pre-wrap 是必须的 —— 否则 `$$` 单独成行那种多行公式会被压成一行。 */
+.markdown-content .markdown-math-block {
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--dsw-alias-label-secondary);
+  font-family: var(--ds-font-family-code);
+  font-size: 14px;
+  line-height: 22px;
+}
+
+/* 行内公式 `$...$`：**刻意不加任何样式**。
+ * 它和普通正文长得一样，因为这里只做"保住字符"，不做排版；加个底色或等宽反而会让人
+ * 以为数学被渲染了。这个 class 留着是为了以后真接 KaTeX 时有挂载点。 */
+
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4 {
+  margin: 18px 0 8px;
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+  line-height: 1.45;
+}
+
+.markdown-content h1 {
+  font-size: 24px;
+}
+
+.markdown-content h2 {
+  font-size: 22px;
+}
+
+.markdown-content h3 {
+  font-size: 19px;
+}
+
+.markdown-content h4 {
+  font-size: 17px;
+}
+
+.markdown-content ul,
+.markdown-content ol {
+  padding-left: 24px;
+}
+
+.markdown-content li + li {
+  margin-top: 4px;
+}
+
+.markdown-content blockquote {
+  padding-left: 12px;
+  border-left: 3px solid var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-secondary);
+}
+
+.markdown-content code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--dsw-alias-markdown-code-block);
+  font-family: var(--ds-font-family-code);
+  font-size: 0.9em;
+}
+
+.markdown-code-frame {
+  overflow: hidden;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 8px;
+  background: var(--dsw-alias-markdown-code-block);
+}
+
+.markdown-code-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  padding: 0 10px 0 12px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1);
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.markdown-code-language {
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--ds-font-family-code);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.markdown-code-copy {
+  flex: none;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 22px;
+}
+
+.markdown-code-copy:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.markdown-content pre.markdown-code-block {
+  overflow: auto;
+  margin: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.markdown-content pre.markdown-code-block code {
+  display: block;
+  padding: 0;
+  background: transparent;
+  white-space: pre;
+}
+
+.markdown-table-wrap {
+  overflow-x: auto;
+}
+
+.markdown-content table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  line-height: 22px;
+}
+
+.markdown-content th,
+.markdown-content td {
+  padding: 7px 10px;
+  border: 1px solid var(--dsw-alias-border-l1);
+  text-align: left;
+  vertical-align: top;
+}
+
+.markdown-content th {
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+}
+
+.markdown-content td {
+  color: var(--dsw-alias-label-secondary);
+}
+
+.markdown-content a {
+  color: var(--dsw-alias-button-info-fill);
+  text-decoration: none;
+}
+
+.markdown-content a:hover {
+  text-decoration: underline;
+}
+
+/* ---------------------------------------------------------------------------
+ * 「正在思考」扫光
+ * 对应：MessageList.jsx
+ * --------------------------------------------------------------------------
+ * 抄自上游 ChatView 的 .turnStatus：文字在「业务蓝 → 淡蓝 → 业务蓝」的
+ * 渐变上用 background-clip: text 抠出字，再平移渐变产生流动感。
+ * 这比一个静态「正在思考...」气泡更接近 DSH 的等待观感。
+ * ------------------------------------------------------------------------- */
+.loading-bubble {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 22px;
+  white-space: nowrap;
+  background: linear-gradient(
+    90deg,
+    var(--dsw-static-deepseek-500) 0%,
+    var(--dsw-static-deepseek-500) 40%,
+    var(--dsw-static-deepseek-200) 50%,
+    var(--dsw-static-deepseek-500) 60%,
+    var(--dsw-static-deepseek-500) 100%
+  );
+  background-position: 100% 0;
+  background-size: 250% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: chat-turn-shimmer 1.8s linear infinite;
+}
+
+@keyframes chat-turn-shimmer {
+  to {
+    background-position: 0 0;
+  }
+}
+
+/* 尊重系统的「减少动态效果」设置：关掉动画并把文字颜色还回来，
+   否则透明字色配上静止渐变会变成一块糊住的色条。 */
+@media (prefers-reduced-motion: reduce) {
+  .loading-bubble {
+    background: none;
+    background-position: 0 0;
+    background-size: 100% 100%;
+    color: var(--dsw-alias-label-tertiary);
+    -webkit-text-fill-color: var(--dsw-alias-label-tertiary);
+    animation: none;
+  }
+}
+
+}

@@ -5,15 +5,25 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AI 聊天助手</title>
   <!--
-    两张样式表顺序不能换：theme.css 是设计 token（--dsw-* 那些变量），
-    styles.css 只用变量名不写具体颜色。调换顺序会让变量解析不出来，
-    页面退化成「有布局、没颜色」。
+    theme.css 必须排在应用样式之前：它是设计 token（--dsw-* 那些变量），
+    应用样式只用变量名、不写具体颜色。反过来的话变量还没声明，页面会退化成
+    「有布局、没颜色」。
 
     样式刻意不参与构建：theme.css 是 DSH 上游的逐字拷贝，保持 <link> 原样，
     它「升级时整份覆盖」的性质才不会被内联破坏。
+
+    应用样式拆成 6 张表（原来是一个 2000+ 行的 styles.css），按功能分文件，
+    改哪个组件就开哪张。**它们之间的先后由各文件里的 @layer 声明决定，与这里的
+    <link> 顺序无关** —— 层序优先于特异性，所以以后调整下面的次序不会改变外观。
+    改样式前先读 styles/01-shell.css 的文件头（全局策略 + 分层注意事项）。
   -->
   <link rel="stylesheet" href="/static/theme.css" />
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/styles/01-shell.css" />
+  <link rel="stylesheet" href="/static/styles/02-controls.css" />
+  <link rel="stylesheet" href="/static/styles/03-conversation.css" />
+  <link rel="stylesheet" href="/static/styles/04-tools.css" />
+  <link rel="stylesheet" href="/static/styles/05-composer.css" />
+  <link rel="stylesheet" href="/static/styles/06-responsive-overlay.css" />
 </head>
 <body>
   <div id="root"></div>

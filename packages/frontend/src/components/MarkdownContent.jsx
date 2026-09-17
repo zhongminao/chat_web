@@ -1,3 +1,5 @@
+// 样式：packages/chat/src/chat/static/styles/03-conversation.css（.markdown-*）
+// 窄屏（手机）覆盖统一在 06-responsive-overlay.css，改小屏表现去那里找。
 import React, { useState } from "react";
 
 import { copyText } from "../clipboard";

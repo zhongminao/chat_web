@@ -1,3 +1,5 @@
+// 样式：packages/chat/src/chat/static/styles/04-tools.css（.plan-panel / .plan-item）
+// 窄屏（手机）覆盖统一在 06-responsive-overlay.css，改小屏表现去那里找。
 import React from "react";
 
 const TODO_STATUS_LABELS = {
