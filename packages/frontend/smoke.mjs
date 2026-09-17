@@ -17,6 +17,134 @@
  */
 import { readFileSync } from "node:fs";
 import { JSDOM } from "jsdom";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+/* ──────────────────────────────────────────────────────────────────────────
+ * 契约校验：本文件里那些 **stub 响应体**必须和后端真实的形状一致。
+ *
+ * 为什么需要它：这套测试把 fetch 全 stub 掉，验的是"给定数据下渲染对不对"——
+ * 所以 stub 的响应体是**手写的**，信的是前端的想象，不是后端的事实。后端把
+ * items 的 kind 改个名、把 settings 的键挪个位，这里不会有任何断言变红。
+ *
+ * 现在形状契约是 packages/chat/backend-contract.json（由
+ * `python packages/chat/check_api.py --update` 从真实后端采出，进 git）：
+ *   - 后端改字段 → check_api.py 红（契约过期）→ 你 --update 更新契约
+ *   - 契约更新之后 → **这个校验立刻发现 stub 还是旧形状** → 要么改前端、要么改 stub
+ * 于是那条边界两侧都被同一份文件审着。
+ * ────────────────────────────────────────────────────────────────────────── */
+const CONTRACT_PATH = join(dirname(fileURLToPath(import.meta.url)), "..", "chat", "backend-contract.json");
+const contractFile = JSON.parse(readFileSync(CONTRACT_PATH, "utf8"));
+const contract = contractFile.endpoints;
+/** 后端能产出的 item kind（load_items 声明的取值域）。前端那张映射表必须覆盖它。 */
+const itemKinds = contractFile.enums?.item_kind ?? [];
+
+/** 与 check_api.py 的 shape_of 同一套规则（那边是 Python，没法共用代码）。 */
+function shapeOf(value) {
+  if (value === null) return "null";
+  if (typeof value === "boolean") return "bool";
+  if (typeof value === "number") return Number.isInteger(value) ? "int" : "float";
+  if (typeof value === "string") return "str";
+  if (Array.isArray(value)) {
+    if (value.length === 0) return { list: "empty" };
+    if (value.every((item) => item && typeof item === "object" && !Array.isArray(item) && "kind" in item)) {
+      const byKind = {};
+      for (const item of value) {
+        const merged = byKind[item.kind];
+        byKind[item.kind] = merged === undefined ? shapeOf(item) : mergeShape(merged, shapeOf(item));
+      }
+      return { list_by_kind: sortKeys(byKind) };
+    }
+    let merged = shapeOf(value[0]);
+    for (const item of value.slice(1)) merged = mergeShape(merged, shapeOf(item));
+    return { list: merged };
+  }
+  if (typeof value === "object") {
+    const out = {};
+    for (const key of Object.keys(value).sort()) out[key] = shapeOf(value[key]);
+    return out;
+  }
+  return typeof value;
+}
+
+function tagOf(shape) {
+  if (shape && typeof shape === "object") {
+    return "list" in shape || "list_by_kind" in shape ? "list" : "object";
+  }
+  return String(shape);
+}
+
+function sortKeys(object) {
+  const out = {};
+  for (const key of Object.keys(object).sort()) out[key] = object[key];
+  return out;
+}
+
+function mergeShape(a, b) {
+  if (JSON.stringify(a) === JSON.stringify(b)) return a;
+  const isObj = (x) => x && typeof x === "object" && !Array.isArray(x);
+  // 空列表不携带元素形状 → 和任何元素形状都合得来（否则"这次 steps 是空数组"会变成假差异）
+  if (isObj(a) && a.list === "empty") return b;
+  if (isObj(b) && b.list === "empty") return a;
+  if (isObj(a) && isObj(b)) {
+    if ("list" in a && "list" in b) return { list: mergeShape(a.list, b.list) };
+    if ("list_by_kind" in a && "list_by_kind" in b) {
+      const out = { ...a.list_by_kind };
+      for (const [kind, shape] of Object.entries(b.list_by_kind)) {
+        out[kind] = kind in out ? mergeShape(out[kind], shape) : shape;
+      }
+      return { list_by_kind: sortKeys(out) };
+    }
+    const out = { ...a };
+    for (const [key, shape] of Object.entries(b)) {
+      out[key] = key in out ? mergeShape(out[key], shape) : shape;
+    }
+    return sortKeys(out);
+  }
+  if (typeof a === "string" && typeof b === "string") {
+    return [...new Set([...a.split("|"), ...b.split("|")])].sort().join("|");
+  }
+  return [tagOf(a), tagOf(b)].sort().join("|");
+}
+
+/* 两侧的同一条规则：**多出来的字段也算差异**。后端悄悄加一个字段时，前端还不知道它，
+   这件事应该被看见，而不是让契约慢慢变成一份没人对得上的文档。 */
+function diffShape(actual, expected, path = "$") {
+  if (JSON.stringify(actual) === JSON.stringify(expected)) return [];
+  const isObj = (x) => x && typeof x === "object" && !Array.isArray(x);
+  // 空列表不携带形状信息，两个方向都算一致（见 mergeShape 里同一句的理由）
+  for (const side of [actual, expected]) {
+    if (isObj(side) && side.list === "empty") return [];
+  }
+  if (isObj(actual) && isObj(expected)) {
+    const listMismatch = ("list" in actual) !== ("list" in expected)
+      || ("list_by_kind" in actual) !== ("list_by_kind" in expected);
+    if (listMismatch) return [`${path}: 列表形态变了（${tagOf(expected)} → ${tagOf(actual)}）`];
+    const differences = [];
+    for (const key of [...new Set([...Object.keys(actual), ...Object.keys(expected)])].sort()) {
+      if (!(key in actual)) differences.push(`${path}.${key}: 契约里有、stub 里没有`);
+      else if (!(key in expected)) differences.push(`${path}.${key}: stub 里多出来（后端没有它）`);
+      else differences.push(...diffShape(actual[key], expected[key], `${path}.${key}`));
+    }
+    return differences;
+  }
+  return [`${path}: 契约 ${JSON.stringify(expected)} → stub ${JSON.stringify(actual)}`];
+}
+
+/** 把一份 stub 响应体对着契约里的某个接口校验。返回差异列表（空 = 一致）。 */
+function checkAgainstContract(endpoint, payload) {
+  const expected = contract[endpoint];
+  if (!expected) return [`契约里没有 ${endpoint}（跑 check_api.py --update 生成）`];
+  return diffShape(shapeOf(payload), expected, endpoint);
+}
+
+/* 契约自检：契约文件本身得在、几个关键接口得在里面。缺了说明生成那步没跑过。 */
+const contractSelfCheck = [];
+for (const endpoint of ["GET /api/providers", "GET /api/sessions", "GET /api/sessions/{id}",
+                        "GET /api/workspaces", "POST /api/chat"]) {
+  if (!contract[endpoint]) contractSelfCheck.push(`契约缺 ${endpoint}`);
+}
+
 
 const STATIC_DIR = new URL("../chat/src/chat/static/", import.meta.url);
 const html = readFileSync(new URL("index.html", STATIC_DIR), "utf-8");
@@ -33,36 +161,66 @@ const providers = {
   ],
   default_provider: "deepseek",
   default_model: "deepseek-flash",
-  default_system_prompt: "You are a helpful assistant.",
-  tool_system_prompt: "You are an agent that can take real actions through tools.",
+  // 服务端给的是**拼好的两份成品**，不是模板碎片 —— 值抄自 prompts.yaml
+  // （改动 prompts.yaml 之后这里要跟着更新；后端那边 check_api.py 会验真）。
+  // 前端只按工具开关**选**哪一份，自己不拼。
+  system_prompt_plain: "You are a helpful assistant. Keep context across turns and answer in the same language as the user when possible.",
+  system_prompt_with_tools: "You are an agent that can take real actions through tools.\nTools available:\nread_file — read any UTF-8 text file (page large files with offset/limit);\nwrite_file — create a new file or fully overwrite one, parent directories are created automatically (use ONLY for new files or complete rewrites);\nedit_file — replace exactly one text block in an existing file (old_text must be copied verbatim from read_file output, never invented);\nrun_bash — execute a shell command (ls, grep, git, run programs);\nplan — create or update the current task checklist for longer multi-step work.\nRules: always read a file before editing or quoting it; never invent file contents; do not reuse or overwrite existing helper scripts (such as run_task.sh) for ad-hoc tests — create a uniquely named file instead. When the task is done, reply concisely in the user's language and summarize what you read, wrote, edited, or ran. Do not describe or speculate about sandbox or permission settings; report only what the tools actually returned.\n\nYou are a helpful assistant. Keep context across turns and answer in the same language as the user when possible.",
 };
 
 /* 服务端会返回的历史（渲染顺序：user / step / assistant 交替）。 */
 const storedItems = [
-  { kind: "user", content: "历史里的第一个提问" },
+  { kind: "user", content: "历史里的第一个提问：**用户原文不渲染**" },
   { kind: "step", tool: "run_bash", arguments: '{"command":"echo hi"}',
     result: "$ echo hi\nhi\n[exit code: 0]", ok: true },
-  { kind: "assistant", content: "历史里的回答" },
+  { kind: "assistant", content: "历史里的回答\n\n- Markdown 列表项\n\n`inline_code`" },
 ];
 
-/* 侧栏用的会话列表。 */
+/* ── 响应体的**唯一构造点** ────────────────────────────────────────────────
+ * fetch stub 和契约校验**都调这两个函数**。分开写就会出这种事：契约校验去验一个
+ * 手写的常量，而 stub 实际返回的是另一份自己拼的对象 —— 于是校验通过、页面却坏了
+ * （真踩过：给 /api/workspaces 加了 resolved，只加在常量上，stub 那份漏了，
+ * 侧栏工作区名就变成了兜底文案）。 */
+
+/** GET /api/workspaces。workspaceId 由 URL 传入 —— 服务端按它解析 resolved。 */
+function workspacesBody(workspaces, url = "") {
+  const asked = /[?&]workspaceId=([^&]*)/.exec(url)?.[1];
+  const askedId = asked ? decodeURIComponent(asked) : null;
+  const known = askedId && workspaces.some((entry) => entry.id === askedId);
+  return {
+    workspaces,
+    default: workspaces[0]?.id,
+    // 有效就原样返回，无效（或没问）就回落默认 —— 和 resolve_workspace 同一个语义
+    resolved: known ? askedId : workspaces[0]?.id,
+  };
+}
+
+/** GET /api/sessions（列表；单场那个接口在别处）。 */
+function sessionsBody(workspaces, sessions) {
+  return { workspace: workspaces[0], sessions };
+}
 const workspacePayload = {
   workspaces: [
     { id: "ws-bc8da407", name: "chat", root: "/home/zhong/mydisk/tools/chat" },
     { id: "ws-8c393341", name: "tmp", root: "/tmp" },
   ],
   default: "ws-bc8da407",
+  // 服务端按传进来的 workspaceId 解析出的"该用哪个"（无效就回落默认）。
+  // 客户端采纳它，不自己算回落 —— 那是服务端的判断。
+  resolved: "ws-bc8da407",
 };
 
 const sessionList = {
   workspace: workspacePayload.workspaces[0],
   sessions: [
     // 第一场：别的断言（标题、历史回放）依赖它，别让它被删除测试消耗掉。
+    // createdAt 是契约要求的字段（后端确实会给）—— 少了它契约校验会红。
     { id: "web-test-restore", title: "侧栏里的会话标题", turns: 3,
-      lastActivity: Date.now(), workspaceId: "ws-bc8da407" },
+      createdAt: Date.now() - 3600000, lastActivity: Date.now(), workspaceId: "ws-bc8da407" },
     // 第二场：专门用来验证"删一场对话"能精确删掉它、且不连累别的。
     { id: "web-test-doomed", title: "注定被删的对话", turns: 2,
-      lastActivity: Date.now() - 60000, workspaceId: "ws-bc8da407" },
+      createdAt: Date.now() - 7200000, lastActivity: Date.now() - 60000,
+      workspaceId: "ws-bc8da407" },
   ],
 };
 
@@ -79,10 +237,65 @@ const browsePayload = {
 
 let failures = 0;
 
-async function scenario(name, { withUrl = true, seedSession = null, sessionItems = null, collapsed = false, expectTools = false, expectLocked = false } = {}) {
+/* ── 契约校验：stub 的响应体必须和后端真实的形状一致 ──────────────────────
+ * 这是这套测试**唯一一条跨过前后端边界的断言**。它跑在最前面，因为后面所有渲染
+ * 断言都建立在"stub 的响应体是后端真会给的形状"这个前提上。 */
+console.log("\n[0. 契约：本文件的 stub 响应体 vs 后端形状契约]");
+{
+  const report = [...contractSelfCheck];
+  // /api/providers 的 stub（每个场景都用它）
+  report.push(...checkAgainstContract("GET /api/providers", providers));
+  // /api/sessions 的 stub（侧栏）—— 调**实际构造它的那个函数**，不是抄一份常量
+  report.push(...checkAgainstContract("GET /api/sessions",
+    sessionsBody(workspacePayload.workspaces, sessionList.sessions)));
+  // /api/workspaces 的 stub —— 同上，两种解析情形都过一遍
+  report.push(...checkAgainstContract("GET /api/workspaces",
+    workspacesBody(workspacePayload.workspaces, "")));
+  report.push(...checkAgainstContract("GET /api/workspaces",
+    workspacesBody(workspacePayload.workspaces, "?workspaceId=ws-8c393341")));
+  report.push(...checkAgainstContract("GET /api/workspaces",
+    workspacesBody(workspacePayload.workspaces, "?workspaceId=ws-gone")));
+  // /api/sessions/{id} 的 stub：
+  //   storedItems 是"恢复历史"那场的（user / step / assistant 三种，没有 running）
+  //   进度轮询那场把它扩到四种都出现
+  const richItems = [
+    { kind: "user", content: "x" },
+    { kind: "step", tool: "t", arguments: "{}", result: "r", ok: true },
+    { kind: "running", tool: "t", arguments: "{}" },
+    { kind: "bash-request", id: "bashreq-smoke", command: "printf hi", cwd: "/tmp/ws", timeout: 60, status: "pending", result: "" },
+    { kind: "plan", todos: [{ content: "检查现状", status: "completed" }, { content: "继续执行", status: "in_progress" }] },
+    { kind: "assistant", content: "x" },
+  ];
+  report.push(...checkAgainstContract("GET /api/sessions/{id}", {
+    id: "x", workspaceId: "ws", settings: { toolsEnabled: true, systemPrompt: "p" },
+    toolsLocked: true, running: false, items: richItems,
+  }));
+  // POST /api/chat 的 stub：**状态回执**（没有 reply / steps 了 —— 发生过什么去读
+  // GET /api/sessions/{id}）。成功和中止两种 state 都要对得上契约。
+  report.push(...checkAgainstContract("POST /api/chat", { state: "ok", toolsLocked: true }));
+  report.push(...checkAgainstContract("POST /api/chat", { state: "interrupted", toolsLocked: true }));
+  report.push(...checkAgainstContract("POST /api/sessions/{id}/bash-requests/{requestId}/approve", { status: "executed", content: "ok", reply: "执行成功" }));
+  report.push(...checkAgainstContract("POST /api/sessions/{id}/bash-requests/{requestId}/reject", { status: "rejected", content: "no", reply: "好的" }));
+  // POST /api/sessions/{id}/interrupt 的 stub
+  report.push(...checkAgainstContract("POST /api/sessions/{id}/interrupt", { interrupted: true }));
+
+  if (report.length === 0) {
+    console.log("  ✅ 7 个接口的 stub 形状都和契约一致");
+  } else {
+    for (const line of report.slice(0, 8)) console.log(`  ❌ ${line}`);
+    if (report.length > 8) console.log(`  ❌ …另有 ${report.length - 8} 处`);
+    console.log("  → stub 过期了。契约是 check_api.py --update 从真实后端采的：");
+    console.log("     先跑 `python packages/chat/check_api.py`，红了就读它的提示，");
+    console.log("     再按后端实际返回的形状改这里的 stub（或改前端去适配）。");
+    failures += 1;
+  }
+}
+
+async function scenario(name, { withUrl = true, seedSession = null, sessionItems = null, collapsed = false, expectTools = false, expectLocked = false, progressSequence = null, expectApproval = false } = {}) {
   const pageErrors = [];
   const fetchCalls = [];
   const patched = [];
+  let pollFrames = 0;   // 进度轮询场景：每次 GET /api/sessions/{id} 返回下一帧
   // 每个场景一份可变的登记表：DELETE 之后要真的少一项，否则"删完列表还在"这种
   // bug 测不出来（stub 原样返回旧列表就等于假装删成功了）。
   let workspaces = workspacePayload.workspaces.map((entry) => ({ ...entry }));
@@ -121,6 +334,25 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
     // 三个接口的路径要分清：/api/workspaces、/api/sessions（可带 ?workspaceId=）、
     // /api/sessions/<id>。用 includes 一刀切会把它们搞混。
     const method = options?.method || "GET";
+
+    // 进度轮询场景：/api/chat 拖到 5 秒后才返回（模拟"这一轮还在跑"，前端于是停在
+    // isLoading=true 并持续轮询），而 GET /api/sessions/{id} 每次返回下一帧
+    // （模拟服务端边跑边落盘）。最后一帧会被反复返回。
+    //
+    // 为什么不是"永不返回"：那样前端的收尾分支永远不执行，轮询定时器就不清，
+    // jsdom 的事件循环一直活着 —— 冒烟会挂到超时（踩过）。
+    if (progressSequence) {
+      if (target.includes("/api/chat")) {
+        return new Promise((resolve) => setTimeout(
+          () => resolve({ ok: true, json: () => Promise.resolve({ state: "ok", toolsLocked: true }) }),
+          5000,
+        ));
+      }
+      if (method === "GET" && target.includes("/api/sessions/")) {
+        const frame = progressSequence[Math.min(pollFrames++, progressSequence.length - 1)];
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(frame) });
+      }
+    }
 
     // 删一场对话
     if (method === "DELETE" && target.includes("/api/sessions/")) {
@@ -165,11 +397,13 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
     if (target.includes("/api/browse")) {
       body = browsePayload;
     } else if (target.includes("/api/workspaces")) {
-      body = { workspaces, default: workspaces[0]?.id };
+      // 这些响应体的构造**必须走下面那几个函数**（workspacesBody / sessionsBody），
+      // 契约校验也调它们 —— 否则就成了"校验我写的常量、而不是实际返回的东西"。
+      body = workspacesBody(workspaces, target);
     } else if (target.includes("/api/sessions/")) {
       body = sessionItems ?? {};
     } else if (target.includes("/api/sessions")) {
-      body = { workspace: workspacePayload.workspaces[0], sessions };
+      body = sessionsBody(workspaces, sessions);
     }
     return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
   };
@@ -197,15 +431,26 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
   };
 
   check("#root 非空（没白屏）", html2.length > 0, `${html2.length} 字符`);
-  check("输入框存在", !!window.document.querySelector("textarea, input[type=text]"));
   check("请求了供应商目录", fetchCalls.some((u) => u.includes("/api/providers")));
-  // 覆盖 providers -> state -> 渲染 这条链：接口回来了要真的显示到 chip 上
-  // 断言的是"默认那个"，不是"列表第一个"：fixture 里列表第一个是 GPT-5.5，
-  // 默认给的是 DeepSeek Flash —— 只有真听了 default_model 才会显示后者。
-  check("模型 chip 显示的是 default_model（不是列表第一个）",
-        text.includes("DeepSeek Flash") && !text.includes("GPT-5.5"),
-        `实得 ${JSON.stringify(text.slice(0, 60))}`);
-  check("发送按钮在", !!window.document.querySelector("button[type=submit]"));
+  if (expectApproval) {
+    // 待审批：输入端被审批面板**接管**（所以没有输入框/发送按钮/模型 chip），
+    // 而对话流里不该再出现"Bash 请求"卡片 —— 审批不干扰对话本身。
+    check("输入端显示审批面板", !!window.document.querySelector(".bash-approval-card"));
+    check("审批面板带「等待审批」提示", text.includes("等待审批"));
+    check("审批面板显示要执行的命令", text.includes("printf hi"));
+    check("审批期间发送按钮让位给面板",
+          !window.document.querySelector("button[type=submit]"));
+    check("对话流里没有 Bash 请求卡片", !text.includes("Bash 请求"));
+  } else {
+    check("输入框存在", !!window.document.querySelector("textarea, input[type=text]"));
+    // 覆盖 providers -> state -> 渲染 这条链：接口回来了要真的显示到 chip 上
+    // 断言的是"默认那个"，不是"列表第一个"：fixture 里列表第一个是 GPT-5.5，
+    // 默认给的是 DeepSeek Flash —— 只有真听了 default_model 才会显示后者。
+    check("模型 chip 显示的是 default_model（不是列表第一个）",
+          text.includes("DeepSeek Flash") && !text.includes("GPT-5.5"),
+          `实得 ${JSON.stringify(text.slice(0, 60))}`);
+    check("发送按钮在", !!window.document.querySelector("button[type=submit]"));
+  }
   // 侧栏内容只在展开时才有 —— 收起场景里断言这些等于自相矛盾，所以按状态分开。
   // 刻意取元素而不是全文 includes："chat" 这种短串用 includes 判可能撞到别处，等于没测。
   if (!collapsed) {
@@ -455,13 +700,51 @@ async function scenario(name, { withUrl = true, seedSession = null, sessionItems
           draft() === (expectTools ? "0" : "1"), `实得 ${JSON.stringify(draft())}`);
   }
 
+  // ── 轮询不能把已经展开的工具输出折叠回去 ──────────────────────────────────
+  //
+  // 守的是一个真实踩过的 bug：toDisplayItems 曾经每次轮询都用 createId() 生成随机 id，
+  // 而它被当作 React 的 key —— 于是每次轮询 React 都认为所有行都是新元素、全部卸载
+  // 重建，<details> 的展开状态（DOM 状态，不是 props）随之被清掉：用户点开的工具输出
+  // 每隔一秒自己折回去一次。
+  //
+  // 修法是让 id 跨轮询稳定（`${sessionId}:${下标}`）。所以这里断言两件事：
+  // 第二次轮询之后**还是同一个 DOM 节点**，且它仍然是打开的。
+  if (progressSequence) {
+    const box = window.document.querySelector("textarea");
+    const form = window.document.querySelector("form");
+    if (box && form) {
+      // React 受控组件：必须走原生 setter + input 事件。直接 box.value = "..." 不会
+      // 更新 React 的 state，于是 canSend 仍是 false，提交什么都不会发生。
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype, "value").set;
+      setter.call(box, "跑个命令");
+      box.dispatchEvent(new window.Event("input", { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      form.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }));
+      await new Promise((resolve) => setTimeout(resolve, 1200));   // 等一次轮询
+
+      const opened = window.document.querySelector("details.tool-step");
+      check("轮询过程中画出了已完成的工具步骤", !!opened);
+      if (opened) {
+        opened.open = true;                                        // 模拟用户点开
+        await new Promise((resolve) => setTimeout(resolve, 1200));  // 再等一次轮询
+        const again = window.document.querySelector("details.tool-step");
+        check("第二次轮询后展开状态还在（key 稳定，节点没被重建）",
+              again === opened && again.open === true,
+              `同一节点=${again === opened} open=${again?.open}`);
+      }
+    } else {
+      check("进度场景：找到输入框与表单", false);
+    }
+  }
+
   if (pageErrors.length) {
     console.log("  --- 页面报错 ---");
     for (const line of pageErrors.slice(0, 3)) {
       console.log("    " + line.split("\n")[0].slice(0, 160));
     }
   }
-  return { text, html: html2, fetchCalls };
+  return { text, html: html2, fetchCalls, document: window.document };
 }
 
 // 场景 1：全新会话
@@ -474,22 +757,39 @@ if (!/web-\d+/.test(fresh.fetchCalls.join(" "))) failures += 1;
 const restored = await scenario("2. 恢复历史 + 会话级设置（已锁）", {
   seedSession: "web-test-restore",
   sessionItems: { id: "web-test-restore", workspaceId: "ws-bc8da407",
-                  settings: { toolsEnabled: true }, toolsLocked: true, items: storedItems },
+                  // systemPrompt 是**会话记录里的值**（load_settings 取最后一轮）——
+                  // 刷新之后面板要靠它恢复，而不是回到默认。
+                  settings: { toolsEnabled: true, systemPrompt: "会话里在用的那份提示词" },
+                  toolsLocked: true, items: storedItems },
   expectTools: true,
   expectLocked: true,
 });
-const checkRestored = (label, condition) => {
-  console.log(`  ${condition ? "✅" : "❌"} ${label}`);
+const checkRestored = (label, condition, detail = "") => {
+  console.log(`  ${condition ? "✅" : "❌"} ${label}${detail ? "  " + detail : ""}`);
   if (!condition) failures += 1;
 };
 checkRestored("用了 localStorage 里的 id", restored.fetchCalls.some((u) => u.includes("web-test-restore")));
 checkRestored("历史里的提问渲染出来了", restored.text.includes("历史里的第一个提问"));
 checkRestored("历史里的回答渲染出来了", restored.text.includes("历史里的回答"));
+checkRestored("助手回答里的 Markdown 列表被渲染", !!restored.document.querySelector(".markdown-content ul li"));
+checkRestored("助手回答里的行内代码被渲染", !!restored.document.querySelector(".markdown-content code"));
+checkRestored("用户消息保持原样文本，不走 Markdown", !restored.document.querySelector(".user-bubble strong"));
 checkRestored("工具步骤也渲染出来了", restored.text.includes("run_bash"));
+// 提示词面板要恢复成**这个会话在用的那份**，不是回到默认 —— 以前提示词只活在
+// React state 里，刷新就丢，而会话历史还在服务端，两边对不上。
+//
+// 面板默认是收起的（textarea 根本不在 DOM 里），所以先点开那个按钮再读。
+const openPanel = [...restored.document.querySelectorAll("button")]
+  .find((button) => button.textContent.trim() === "系统提示词");
+openPanel?.click();
+await new Promise((resolve) => setTimeout(resolve, 30));
+const restoredPrompt = restored.document.querySelector(".system-panel textarea")?.value;
+checkRestored("刷新后系统提示词从会话记录恢复（不是回到默认）",
+              restoredPrompt === "会话里在用的那份提示词",
+              `实得 ${JSON.stringify(restoredPrompt)}`);
 
 // 场景 3：localStorage 不可用（不透明 origin）-> 仍须能渲染
 await scenario("3. 存储不可用也不白屏", { withUrl: false });
-
 // 场景 4：侧栏收起状态从 localStorage 恢复 -> 应缩成窄条，只留展开按钮
 const rail = await scenario("4. 侧栏收起（缩成窄条）", { collapsed: true });
 const railCheck = (label, condition) => {
@@ -502,9 +802,146 @@ railCheck("窄条里只剩展开按钮（图标，不是文字）",
 railCheck("窄条里不再渲染会话列表", !/侧栏里的会话标题/.test(rail.text));
 railCheck("窄条里没有「新对话」", !rail.text.includes("新对话"));
 
+// 场景 5：轮次进行中的进度轮询。GET /api/sessions/{id} 每次返回下一帧（模拟边跑边
+// 落盘），/api/chat 永不返回（模拟"还在跑"）。断言两件事：步骤会**逐条**出现，
+// 而且用户点开的工具输出不会被下一次轮询折叠回去（React key 必须跨轮询稳定）。
+await scenario("5. 轮询进度（步骤逐条出现、展开状态不丢）", {
+  seedSession: "web-progress",
+  progressSequence: [
+    { running: true, items: [{ kind: "user", content: "跑个命令" }] },
+    {
+      running: true,
+      items: [
+        { kind: "user", content: "跑个命令" },
+        { kind: "step", tool: "run_bash", arguments: '{"command":"ls"}', result: "a.txt", ok: true },
+      ],
+    },
+    {
+      running: true,
+      items: [
+        { kind: "user", content: "跑个命令" },
+        { kind: "step", tool: "run_bash", arguments: '{"command":"ls"}', result: "a.txt", ok: true },
+        { kind: "running", tool: "read_file", arguments: '{"path":"a.txt"}' },
+      ],
+    },
+  ],
+});
+
+// 场景 6：**前端那张 kind → 渲染 的映射表必须覆盖后端能产出的每一种 kind。**
+//
+// 取值域来自契约（后端 session_store.ITEM_KINDS 声明的），而且探针数据**由它驱动
+// 生成** —— 这一点是重点：手写一份固定列表就成了"验我的意图，不是验代码"，后端加了
+// 新 kind 时探针里根本没有那一项，测试照样绿（这个坑我在这套检查里踩了第三次）。
+//
+// 于是后端加一个新 kind 之后：契约更新 → 探针里多出一项 → 前端不认识 → 落到
+// 「未知条目」→ 红。这正是"后端加了新类型而前端悄悄画错"那类静默 bug 的哨兵。
+const SAMPLE_BY_KIND = {
+  user: { kind: "user", content: "用户消息占位" },
+  step: { kind: "step", tool: "run_bash", arguments: "{}", result: "ok", ok: true },
+  running: { kind: "running", tool: "read_file", arguments: "{}" },
+  "bash-request": { kind: "bash-request", id: "bashreq-probe", command: "printf hi", cwd: "/tmp/ws", timeout: 60, status: "executed", result: "bash-approved-output\n[exit code: 0]" },
+  plan: { kind: "plan", todos: [{ content: "计划条目占位", status: "in_progress" }] },
+  assistant: { kind: "assistant", content: "助手消息占位" },
+};
+// 每种 kind 渲染出来时文本里该出现什么 —— 要**积极的证据**（"没报未知条目"是消极
+// 证据：整条渲染路径没跑也会得到它）。
+const MARKER_BY_KIND = {
+  user: "用户消息占位", step: "run_bash", running: "正在执行", "bash-request": "bash-approved-output", plan: "计划条目占位", assistant: "助手消息占位",
+};
+// 没有样本的 kind 用兜底：它必须让前端落到「未知条目」——**这就是探针的意图**，
+// 也正是"后端加了新 kind 而前端还没学会"时该有的表现。
+const probeItems = itemKinds
+  .map((kind) => SAMPLE_BY_KIND[kind] ?? { kind, content: "（这个 kind 还没有样本）" })
+  .sort((a, b) => (a.kind === "user" ? -1 : b.kind === "user" ? 1 : 0));
+
+const kindsProbe = await scenario("6. item kind 覆盖（契约取值域驱动）", {
+  seedSession: "web-kinds",
+  sessionItems: {
+    id: "web-kinds", workspaceId: "ws-bc8da407", settings: { toolsEnabled: false },
+    toolsLocked: true, running: false, items: probeItems,
+  },
+  expectLocked: true,   // 这个 fixture 是「说过话的会话」，开关该锁死
+});
+const kindsCheck = (label, condition, detail = "") => {
+  console.log(`  ${condition ? "✅" : "❌"} ${label}${detail ? "  " + detail : ""}`);
+  if (!condition) failures += 1;
+};
+kindsCheck("契约里有 item_kind 取值域（否则这条测试是空的）",
+           itemKinds.length > 0, `实得 ${JSON.stringify(itemKinds)}`);
+// 先自检：**这个哨兵真的会响吗** —— 塞一个契约里没有的 kind，必须落到"未知条目"。
+// 不然"没看到未知条目"可能只是因为整条渲染路径根本没跑。
+const unknownProbe = await scenario("6b. 未知 kind 必须显形（哨兵自检）", {
+  seedSession: "web-kinds-unknown",
+  sessionItems: {
+    id: "web-kinds-unknown", workspaceId: "ws-bc8da407", settings: { toolsEnabled: false },
+    toolsLocked: true, running: false,
+    items: [{ kind: "brand-new-kind-from-server", content: "x" }],
+  },
+  expectLocked: true,
+});
+kindsCheck("注入一个不认识的 kind → 界面明说「未知条目」（不是静默当普通消息画）",
+           unknownProbe.text.includes("未知条目"), `实得 ${JSON.stringify(unknownProbe.text.slice(0, 80))}`);
+kindsCheck("契约取值域渲染完没有落到未知条目（前端的映射表覆盖全了）",
+           !kindsProbe.text.includes("未知条目"),
+           `还没学会的 kind: ${JSON.stringify(probeItems.filter((i) => !MARKER_BY_KIND[i.kind]).map((i) => i.kind))}`);
+// 积极的证据：每种有样本的 kind 都真的画出来了。写成"逐项检查"而不是一串 &&，
+// 失败时能直接看出是**哪一个** kind 没画出来。
+const missingMarkers = itemKinds.filter(
+  (kind) => MARKER_BY_KIND[kind] && !kindsProbe.text.includes(MARKER_BY_KIND[kind]));
+kindsCheck("每种 kind 都真的画出来了（不是「没报错」就算过）",
+           missingMarkers.length === 0, `没画出来的: ${JSON.stringify(missingMarkers)}`);
+const planPanel = kindsProbe.document.querySelector(".plan-panel");
+kindsCheck("plan 渲染在输入区上方的独立面板", !!planPanel && !kindsProbe.document.querySelector(".chat-box .plan-panel"));
+kindsCheck("plan 不再渲染进对话窗口", !kindsProbe.document.querySelector(".chat-box .plan-list"));
+if (planPanel) {
+  const wasOpen = planPanel.open;
+  planPanel.querySelector("summary")?.click();
+  const collapsed = planPanel.open === false;
+  planPanel.querySelector("summary")?.click();
+  kindsCheck("plan 面板可以折叠和展开", wasOpen === true && collapsed && planPanel.open === true);
+}
+
+const stalePlanProbe = await scenario("6c. 下一轮不显示上一轮 plan", {
+  seedSession: "web-stale-plan",
+  sessionItems: {
+    id: "web-stale-plan", workspaceId: "ws-bc8da407",
+    settings: { toolsEnabled: true }, toolsLocked: true, running: false,
+    items: [
+      { kind: "user", content: "上一轮" },
+      { kind: "plan", todos: [{ content: "旧计划不该显示", status: "in_progress" }] },
+      { kind: "assistant", content: "上一轮结束" },
+      { kind: "user", content: "下一轮" },
+      { kind: "assistant", content: "直接回答" },
+    ],
+  },
+  expectTools: true,
+  expectLocked: true,
+});
+kindsCheck("进入下一轮后不显示上一轮 plan",
+           !stalePlanProbe.document.querySelector(".plan-panel") && !stalePlanProbe.text.includes("旧计划不该显示"));
+
+// 场景 7：bash 审批接管输入端。
+//
+// 两条不变式：待审批时**输入端**是审批面板（发送按钮让位），而**对话流**里不该
+// 冒出"Bash 请求"卡片 —— 审批是输入区的交互，不该把对话本身挤开。
+await scenario("7. bash 审批（输入端接管）", {
+  seedSession: "web-approval",
+  sessionItems: {
+    id: "web-approval", workspaceId: "ws-bc8da407",
+    settings: { toolsEnabled: true }, toolsLocked: true, running: false,
+    items: [
+      { kind: "user", content: "跑个命令" },
+      { kind: "assistant", content: "我来执行" },
+      { kind: "bash-request", id: "bashreq-probe-1", command: "printf hi",
+        cwd: "/tmp/ws", timeout: 60, status: "pending", result: "" },
+    ],
+  },
+  expectTools: true, expectLocked: true, expectApproval: true,
+});
+
 console.log();
 if (failures) {
   console.log(`失败 ${failures} 项`);
   process.exit(1);
 }
-console.log("UI 冒烟测试通过（4 个场景）");
+console.log("UI 冒烟测试通过（8 个场景）");

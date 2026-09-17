@@ -13,9 +13,12 @@ export async function fetchSessions(workspaceId) {
   return response.json();
 }
 
-// {workspaces: [{id, name, root}], default: "<id>"}
-export async function fetchWorkspaces() {
-  const response = await fetch("/api/workspaces");
+// {workspaces: [{id, name, root}], default: "<id>", resolved: "<id>"}
+// resolved = 按传进来的 workspaceId 解析出来的"现在该用哪个"（无效就回落默认）。
+// 客户端**采纳它**，不要自己再算一遍回落 —— 那是服务端的判断。
+export async function fetchWorkspaces(workspaceId) {
+  const query = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : "";
+  const response = await fetch(`/api/workspaces${query}`);
   return response.json();
 }
 
@@ -84,6 +87,12 @@ export async function fetchSessionItems(sessionId) {
   return response.json();
 }
 
+// 一轮对话。返回的是**状态回执**（{state, toolsLocked}），不是结果的副本 ——
+// 发生过什么去读 GET /api/sessions/{id}（日志的投影，唯一权威）。
+//
+// 失败时把服务端的 detail 带出来：那些话是给人看的（"这场对话已经有一轮在跑 ——
+// 等它结束，或者先点停止"），吞掉它只留一个状态码，用户就没法知道该怎么办。
+// status 也带出来，调用方可能按状态分流（比如 400 = sessionId 非法）。
 export async function sendChat(payload) {
   const response = await fetch("/api/chat", {
     method: "POST",
@@ -93,8 +102,54 @@ export async function sendChat(payload) {
     body: JSON.stringify(payload),
   });
 
+  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(`请求失败，状态码：${response.status}`);
+    const error = new Error(data.detail || `请求失败，状态码：${response.status}`);
+    error.status = response.status;
+    throw error;
   }
-  return response.json();
+  return data;
+}
+
+// 请求中止这场会话正在跑的那一轮。
+//
+// **协作式**：服务端只在步边界检查（每次模型调用之前、每条工具调用之前），所以
+// 前面还有一步在跑时，这个请求会立刻返回、但那一轮还没停 —— 界面必须显示
+// "正在停止…"，真正的结束是 /api/chat 那个请求自己返回（带 interrupted: true）。
+//
+// interrupted: false 不是错误：点停止时那一轮可能刚好自己结束了。
+export async function approveBashRequest(sessionId, requestId) {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/bash-requests/${encodeURIComponent(requestId)}/approve`,
+    { method: "POST" },
+  );
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.detail || "批准 bash 失败");
+  }
+  return data;
+}
+
+export async function rejectBashRequest(sessionId, requestId) {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/bash-requests/${encodeURIComponent(requestId)}/reject`,
+    { method: "POST" },
+  );
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.detail || "拒绝 bash 失败");
+  }
+  return data;
+}
+
+export async function interruptSession(sessionId) {
+  const response = await fetch(
+    `/api/sessions/${encodeURIComponent(sessionId)}/interrupt`,
+    { method: "POST" },
+  );
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.detail || "停止失败");
+  }
+  return data;
 }

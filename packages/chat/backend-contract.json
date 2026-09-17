@@ -1,0 +1,141 @@
+{
+  "_comment": "后端响应的形状契约。由 check_api.py --update 生成；两侧（check_api.py 与 frontend/smoke.mjs）都对着它断言。",
+  "endpoints": {
+    "GET /api/browse": {
+      "entries": {
+        "list": {
+          "name": "str",
+          "path": "str"
+        }
+      },
+      "parent": "str",
+      "path": "str"
+    },
+    "GET /api/providers": {
+      "default_model": "str",
+      "default_provider": "str",
+      "providers": {
+        "list": {
+          "display_name": "str",
+          "models": {
+            "list": {
+              "id": "str",
+              "name": "str",
+              "temperature": "float"
+            }
+          },
+          "provider": "str"
+        }
+      },
+      "system_prompt_plain": "str",
+      "system_prompt_with_tools": "str"
+    },
+    "GET /api/sessions": {
+      "sessions": {
+        "list": {
+          "createdAt": "int",
+          "id": "str",
+          "lastActivity": "int",
+          "title": "str",
+          "turns": "int",
+          "workspaceId": "str"
+        }
+      },
+      "workspace": {
+        "id": "str",
+        "name": "str",
+        "root": "str"
+      }
+    },
+    "GET /api/sessions/{id}": {
+      "id": "str",
+      "items": {
+        "list_by_kind": {
+          "assistant": {
+            "content": "str",
+            "kind": "str"
+          },
+          "bash-request": {
+            "command": "str",
+            "cwd": "str",
+            "id": "str",
+            "kind": "str",
+            "result": "str",
+            "status": "str",
+            "timeout": "int"
+          },
+          "plan": {
+            "kind": "str",
+            "todos": {
+              "list": {
+                "content": "str",
+                "status": "str"
+              }
+            }
+          },
+          "running": {
+            "arguments": "str",
+            "kind": "str",
+            "tool": "str"
+          },
+          "step": {
+            "arguments": "str",
+            "kind": "str",
+            "ok": "bool",
+            "result": "str",
+            "tool": "str"
+          },
+          "user": {
+            "content": "str",
+            "kind": "str"
+          }
+        }
+      },
+      "running": "bool",
+      "settings": {
+        "systemPrompt": "str",
+        "toolsEnabled": "bool"
+      },
+      "toolsLocked": "bool",
+      "workspaceId": "str"
+    },
+    "GET /api/workspaces": {
+      "default": "str",
+      "resolved": "str",
+      "workspaces": {
+        "list": {
+          "id": "str",
+          "name": "str",
+          "root": "str"
+        }
+      }
+    },
+    "POST /api/chat": {
+      "state": "str",
+      "toolsLocked": "bool"
+    },
+    "POST /api/sessions/{id}/bash-requests/{requestId}/approve": {
+      "content": "str",
+      "reply": "str",
+      "status": "str"
+    },
+    "POST /api/sessions/{id}/bash-requests/{requestId}/reject": {
+      "content": "str",
+      "reply": "str",
+      "status": "str"
+    },
+    "POST /api/sessions/{id}/interrupt": {
+      "interrupted": "bool"
+    }
+  },
+  "enums": {
+    "item_kind": [
+      "assistant",
+      "bash-request",
+      "plan",
+      "running",
+      "step",
+      "user"
+    ]
+  }
+}

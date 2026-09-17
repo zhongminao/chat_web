@@ -8,13 +8,18 @@
     第 2 轮 模型要 read_file （读回验证）
     第 3 轮 模型直接说话（任务结束）
 
-最后几条断言专门守 root：工具必须在调用方给的目录里干活，且模型**不能**自己指定 root。
+断言守三件事：
+- root：工具必须在调用方给的目录里干活，且模型**不能**自己指定 root；
+- 协议：tool_call_id 配对、protocol_messages 的顺序与形状；
+- 落盘：每条协议消息都真的进了会话日志（不是只留在内存里）。
 """
 import json
 import shutil
+import tempfile
 from pathlib import Path
 
-from chat.agent import TOOL_SCHEMAS, make_executor, run_agent_turn
+from chat.agent import TOOL_SCHEMAS, make_executor, run_agent_turn, session_store
+from chat.agent import observed as observed_store
 
 DEMO_DIR = Path("/tmp/agent_demo")      # 演示用的"工作区根"
 DEMO_FILE = DEMO_DIR / "hello.txt"
@@ -64,14 +69,29 @@ def main() -> None:
     ]
     fake = FakeClient(script)
 
+    # 演示没有会话身份，所以开一个一次性的 observed context（不落任何共享表）。
+    # 它必须存在：make_executor 的 observed 是必填的，没有"默认 context"可退回。
+    observed = observed_store.REGISTRY.new_context("demo")
+
+    # 会话日志落到临时目录 —— 演示不该碰真实 storage。
+    # writer 现在是 run_agent_turn 的必填参数：循环每产生一条协议消息就落一条。
+    demo_log = Path(tempfile.mkdtemp(prefix="demo-session-"))
+    writer = session_store.TurnWriter(demo_log, "demo", workspace_id="ws-demo")
+    writer.begin(
+        {"provider": "demo", "model": "fake", "toolsEnabled": True},
+        [{"role": "user", "content": "请帮我写一个 hello.txt"}],
+    )
+
     user_messages = [{"role": "user", "content": "请帮我写一个 hello.txt"}]
     reply, steps, protocol_messages = run_agent_turn(
         client=fake,
         messages=user_messages,
+        writer=writer,
         tool_schemas=TOOL_SCHEMAS,
         # 相对路径都得落在这个目录里 —— 服务端传的是工作区的根，这里传演示目录
-        execute_tool=make_executor(DEMO_DIR),
+        execute_tool=make_executor(DEMO_DIR, observed),
     )
+    writer.finish(durationMs=0)
 
     # ---- 结果展示 ----
     print("=== steps（agent 干了什么）===")
@@ -108,13 +128,33 @@ def main() -> None:
     # ---- 断言：root 真的生效（这条守的是一个曾经存在的静默 bug）----
     # 以前四个工具都按**进程 cwd** 解析，于是"工作区"在界面上能选、能分组，
     # 但 agent 始终在服务进程的目录里干活 —— 选了等于没选，而且不报错。
-    executor = make_executor(DEMO_DIR)
+    executor = make_executor(DEMO_DIR, observed, sandbox_mode="full-access")
     assert str(DEMO_DIR) in executor("run_bash", '{"command": "pwd"}'), "bash 没在给定的 root 里跑"
     assert "hello.txt" in executor("run_bash", '{"command": "ls"}'), "root 里看不到刚写的文件"
     # 模型自己塞 root 必须无效：基准目录只能由宿主决定
     sneak = executor("run_bash", json.dumps({"command": "pwd", "root": "/"}))
     assert str(DEMO_DIR) in sneak, "模型把自己的 root 塞进来了 —— 基准目录被模型劫持"
+
+    # ---- 断言：落盘路径（这条守的是"边跑边写"这件事）----
+    # 以前只验内存里的 protocol_messages。现在每产生一条就落盘，所以**真读一遍日志**，
+    # 比对记录序列 —— 这才是在验落盘，不是在验内存。
+    # 日志是边跑边长的，所以这里读到的必须是完整的一轮：session → turn → user →
+    # (assistant → tool) × 2 → assistant → turn-end。
+    records = session_store.read_records(demo_log, "demo")
+    assert not writer.failed, "落盘失败被静默吞掉了"
+    assert [r["type"] for r in records] == [
+        "session", "turn", "user",
+        "assistant", "tool", "assistant", "tool", "assistant",
+        "turn-end",
+    ], f"落盘记录序列不对: {[r['type'] for r in records]}"
+    # 重放出来的历史必须**逐条等于**内存里的协议消息（前面加上那条 user）。
+    # 这条把"两个真值源"钉在一起：日志折出来的历史 = 循环当场交出去的东西。
+    replayed = session_store.load_history(demo_log, "demo")
+    assert replayed == [{"role": "user", "content": "请帮我写一个 hello.txt"}] + protocol_messages, \
+        f"重放出来的历史与协议消息不一致:\n  {replayed}"
+
     print("\n✅ 闭环通过：写文件 → 读回验证 → 模型总结，tool_call_id 配对正确")
+    print(f"   落盘记录 {len(records)} 条 → {demo_log}/demo.jsonl")
 
 
 if __name__ == "__main__":

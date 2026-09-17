@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 
 from chat.agent import session_store
+from chat.agent.sandbox import DEFAULT_SANDBOX_MODE, VALID_SANDBOX_MODES, normalize_mode
 from chat.runtime import (
     CLI_SESSION_FILE,
     DEFAULT_MODEL_NAME,
@@ -31,11 +32,11 @@ from chat.runtime import (
     STORAGE_DIR,
     ChatMessage,
     TurnRequest,
-    effective_system_prompt,
     elapsed_ms,
     ensure_default_workspace,
     ensure_runtime_env,
     request_real_reply,
+    resolve_system_prompt,
     resolve_workspace,
 )
 
@@ -50,6 +51,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("-s", "--session", help="续聊指定会话（默认沿用上次 CLI 用的那场）")
     parser.add_argument("--new", action="store_true", help="开一场新会话")
     parser.add_argument("--tools", action="store_true", help="启用工具（只在首轮生效）")
+    parser.add_argument("--sandbox", choices=VALID_SANDBOX_MODES, default=DEFAULT_SANDBOX_MODE,
+                        help="工具沙箱模式（每轮可改）")
     parser.add_argument("-w", "--workspace", help="工作区 id（默认：登记表里的默认工作区）")
     parser.add_argument("-p", "--provider", default=DEFAULT_PROVIDER)
     parser.add_argument("-m", "--model", default=DEFAULT_MODEL_NAME)
@@ -126,6 +129,7 @@ def run_turn(
     model_name: str,
     system_prompt: str | None,
     tools_enabled: bool,
+    sandbox_mode: str,
 ) -> str:
     """跑一轮，写进会话日志，返回模型的回复。"""
     prior_messages = [
@@ -137,36 +141,43 @@ def run_turn(
         model_name=model_name,
         system_prompt=system_prompt,
         tools_enabled=tools_enabled,
+        sandbox_mode=normalize_mode(sandbox_mode),
     )
 
     started = time.monotonic()
+    writer = session_store.TurnWriter(
+        SESSION_DIR, session_id, workspace_id=workspace.get("id"))
     try:
-        result = request_real_reply(request, prior_messages, workspace.get("root"))
-    except Exception as exc:
-        # 跟服务端一样：失败**不往历史里写 user 消息**（否则重试会把同一句话追加两遍），
-        # 只在 turn 记录里留一条 error + attempted 备查。
-        session_store.append_turn(
+        # 提示词在**跑之前**解析并落盘（跟 web 一个做法）：这样取消/失败的那一轮也
+        # 记得住用的是哪份。**只在变了的时候才写** —— 没变就沿用上一轮记下的。
+        meta = {"provider": provider, "model": model_name, "toolsEnabled": tools_enabled,
+                "sandboxMode": normalize_mode(sandbox_mode)}
+        meta.update(session_store.system_prompt_meta(
             SESSION_DIR, session_id,
-            user_messages=[], protocol=[],
-            workspace_id=workspace.get("id"),
-            meta={"error": str(exc), "attempted": [message]},
-        )
+            resolve_system_prompt(system_prompt, tools_enabled)))
+        writer.begin(meta, [{"role": "user", "content": message}])
+        result = request_real_reply(
+            request, prior_messages, workspace.get("root"), writer=writer,
+            observed_context_id=f"session:{session_id}")
+    except KeyboardInterrupt:
+        # SIGINT 直接打断阻塞中的模型调用，所以 CLI 不需要协作式取消令牌。
+        # loop 已经在自己的 finally 里给没跑完的调用补了带真实原因的合成结果。
+        writer.finish(durationMs=elapsed_ms(started), error="interrupted by user (Ctrl-C)")
+        raise
+    except Exception as exc:
+        # 失败不留痕这条规矩没变，但它现在由 load_history 扣住"没有产出的那一轮"
+        # 来保证（user 已经在 begin() 写过了），不再靠"失败不写 user"。
+        writer.finish(durationMs=elapsed_ms(started), error=str(exc))
         raise
 
-    session_store.append_turn(
-        SESSION_DIR, session_id,
-        user_messages=[{"role": "user", "content": message}],
-        protocol=result.protocol_messages,
-        workspace_id=workspace.get("id"),
-        meta={
-            "provider": provider,
-            "model": model_name,
-            "temperature": result.temperature,
-            "toolsEnabled": tools_enabled,
-            "systemPrompt": effective_system_prompt(result.messages),
-            "durationMs": elapsed_ms(started),
-        },
+    writer.finish(
+        durationMs=elapsed_ms(started),
+        temperature=result.temperature,
     )
+    # 会话模式里日志就是状态，写失败不能静默 —— 这条契约以前写在 append_turn 的
+    # docstring 里，但两个调用方都没检查返回值。现在检查了。
+    if writer.failed:
+        raise OSError("会话日志写入失败")
     return result.reply, result.steps
 
 
@@ -186,6 +197,7 @@ def main(argv: list[str] | None = None) -> int:
     ensure_runtime_env(args.provider)
 
     tools_enabled, overridden = resolve_tools_enabled(session_id, args.tools)
+    sandbox_mode = normalize_mode(args.sandbox)
 
     print(f"会话 {session_id}")
     print(f"工作区 {workspace.get('name')} → {workspace.get('root')}")
@@ -193,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
     # 表现是"历史全是空的"，而这件事以前完全没有提示 —— 踩过。
     print(f"数据 {STORAGE_DIR}")
     print(f"模型 {args.provider}/{args.model}｜工具 {'开' if tools_enabled else '关'}"
-          f"（首轮定下，之后沿用）")
+          f"｜沙箱 {sandbox_mode}（每轮可改）")
     if overridden:
         print(f"  （你说的是 {'开' if args.tools else '关'}，但这场会话首轮定的是 "
               f"{'开' if tools_enabled else '关'}，沿用日志里的值；要改请开新会话）")
@@ -208,6 +220,7 @@ def main(argv: list[str] | None = None) -> int:
                 model_name=args.model,
                 system_prompt=args.system,
                 tools_enabled=tools_enabled,
+                sandbox_mode=sandbox_mode,
             )
         except Exception as exc:
             print(f"❌ 这一轮失败：{exc}\n")

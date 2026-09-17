@@ -1,0 +1,148 @@
+{
+  "entry": "selfcheck_entry_5c9d1e.py",
+  "sha256_12": "d6ff3aec1120",
+  "sources": [
+    {
+      "role": "probe",
+      "file": "plan_probe_f7c2a1.py",
+      "bytes": 2233,
+      "sha256_12": "94cc24685939"
+    },
+    {
+      "role": "drill",
+      "file": "plan_tool_drill_b4d8e2.py",
+      "bytes": 4160,
+      "sha256_12": "fd929b2a6818"
+    }
+  ],
+  "groups": [
+    {
+      "title": "复用 probe 模块：斐波那契",
+      "ok": true,
+      "checks": [
+        {
+          "name": "fib(10) 第 10 项 == 34",
+          "passed": true,
+          "detail": "实得 34"
+        },
+        {
+          "name": "递推关系成立",
+          "passed": true,
+          "detail": "相邻两项之和等于下一项"
+        },
+        {
+          "name": "序列单调不减",
+          "passed": true,
+          "detail": "10 项"
+        }
+      ]
+    },
+    {
+      "title": "复用 probe 模块：文本统计与回归比对",
+      "ok": true,
+      "checks": [
+        {
+          "name": "narr-probe 下发现 .txt",
+          "passed": true,
+          "detail": "3 个: alpha.txt, beta.txt, gamma.txt"
+        },
+        {
+          "name": "与上一轮报告一致",
+          "passed": true,
+          "detail": "本轮 files/chars/words = 3/45/9，上轮 = 3/45/9"
+        }
+      ]
+    },
+    {
+      "title": "复用 drill 模块：环境探测",
+      "ok": true,
+      "checks": [
+        {
+          "name": "python 可用",
+          "passed": true,
+          "detail": "版本 3.12.3"
+        },
+        {
+          "name": "工作目录存在",
+          "passed": true,
+          "detail": "/home/zhong/mydisk/tools/chat/workplace"
+        },
+        {
+          "name": "工作目录可写",
+          "passed": true,
+          "detail": "由报告写入结果反证"
+        }
+      ]
+    },
+    {
+      "title": "复用 drill 模块：工作区清单",
+      "ok": true,
+      "checks": [
+        {
+          "name": "文件数量 >= 1",
+          "passed": true,
+          "detail": "15 个文件"
+        },
+        {
+          "name": "目录已列出",
+          "passed": true,
+          "detail": "__pycache__, narr-probe"
+        },
+        {
+          "name": "未与既有探测脚本重名",
+          "passed": true,
+          "detail": "本脚本为唯一命名"
+        }
+      ]
+    },
+    {
+      "title": "复用 drill 模块：算法自检",
+      "ok": true,
+      "checks": [
+        {
+          "name": "gcd(48,18)",
+          "passed": true,
+          "detail": "期望 6 实得 6"
+        },
+        {
+          "name": "gcd(17,5)",
+          "passed": true,
+          "detail": "期望 1 实得 1"
+        },
+        {
+          "name": "gcd(100,100)",
+          "passed": true,
+          "detail": "期望 100 实得 100"
+        },
+        {
+          "name": "gcd(0,7)",
+          "passed": true,
+          "detail": "期望 7 实得 7"
+        }
+      ]
+    },
+    {
+      "title": "复用 drill 模块：注入失败测试",
+      "ok": false,
+      "checks": [
+        {
+          "name": "正常断言",
+          "passed": true,
+          "detail": "1 + 1 == 2"
+        },
+        {
+          "name": "故意失败断言",
+          "passed": false,
+          "detail": "--fail: 2 + 2 != 5"
+        }
+      ]
+    }
+  ],
+  "totals": {
+    "groups": 6,
+    "checks": 17,
+    "passed": 16,
+    "failed": 1
+  },
+  "exit_code": 1
+}

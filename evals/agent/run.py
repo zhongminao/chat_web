@@ -49,7 +49,7 @@ from chat.runtime import (  # noqa: E402
     DEFAULT_PROVIDER,
     ChatMessage,
     TurnRequest,
-    effective_system_prompt,
+    resolve_system_prompt,
     elapsed_ms,
     ensure_runtime_env,
     request_real_reply,
@@ -105,6 +105,9 @@ def run_case(
     error = ""
     steps: list[dict] = []
     reply = ""
+    # 落盘器在这里建、不在 try 里：TurnWriter 只是拼一个路径，不会失败；放外面才能
+    # 保证 except 分支里它一定已绑定，否则异常会变成 NameError 盖掉真正的原因。
+    writer = session_store.TurnWriter(SESSIONS_DIR, session_id)
     try:
         # 走的是**服务端同一条路径**（同一个 TurnRequest → normalize → 循环），
         # 所以系统提示词怎么拼、工具怎么给，跟真实使用完全一致。只在根目录上不同：
@@ -115,26 +118,31 @@ def run_case(
             model_name=model_name,
             tools_enabled=True,
         )
-        result = request_real_reply(request, [], str(work_dir))
-        reply, steps = result.reply, result.steps
-        # 轨迹另存一份（跟服务端会话日志同格式），卡住时能翻
-        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-        session_store.append_turn(
-            SESSIONS_DIR, session_id,
-            user_messages=[{"role": "user", "content": task}],
-            protocol=result.protocol_messages,
-            meta={
+        # 轨迹另存一份（跟服务端会话日志同格式），卡住时能翻。
+        # 父目录由 TurnWriter 落盘时建，不用在这里 mkdir。
+        writer.begin(
+            {
                 "provider": provider,
                 "model": model_name,
-                "temperature": result.temperature,
-                "systemPrompt": effective_system_prompt(result.messages),
-                "durationMs": elapsed_ms(started),
                 "case": case_dir.name,
                 "run": run_index,
+                # 提示词在**跑之前**解析并落盘：对比两次结果时，"这次用的哪份提示词"
+                # 是必要上下文，不是装饰。
+                "systemPrompt": resolve_system_prompt(None, tools_enabled=True),
             },
+            [{"role": "user", "content": task}],
         )
+        result = request_real_reply(
+            request, [], str(work_dir), writer=writer,
+            observed_context_id=f"eval:{session_id}")
+        writer.finish(
+            durationMs=elapsed_ms(started),
+            temperature=result.temperature,
+        )
+        reply, steps = result.reply, result.steps
     except Exception as exc:  # 模型/网络挂了也要留一条记录，别让整轮评估中断
         error = f"{type(exc).__name__}: {exc}"
+        writer.finish(durationMs=elapsed_ms(started), error=error)
     duration_ms = elapsed_ms(started)
 
     # 判定：check.sh 在临时目录里跑，退出码 0 = 通过

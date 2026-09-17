@@ -28,6 +28,6 @@ where = ["src"]
 include = ["chat*"]
 
 [tool.setuptools.package-data]
-# providers.yaml 随包分发（openai_client 按 __file__ 相对加载）；
+# providers.yaml / prompts.yaml 随包分发（都按 __file__ 相对加载）；
 # static/ 是前端**产物**，提交在仓库里，所以不碰前端的人 clone 下来直接能跑。
-chat = ["providers.yaml", "static/*", "static/theme/*"]
+chat = ["providers.yaml", "prompts.yaml", "static/*", "static/theme/*"]

@@ -12,6 +12,8 @@ export default function Composer({
   onSubmit,
   onKeyDown,
   isLoading,
+  isStopping,
+  onStop,
   canSend,
   providers,
   provider,
@@ -237,9 +239,24 @@ export default function Composer({
           ) : null}
         </div>
 
-        <button type="submit" className="primary-button" disabled={!canSend}>
-          {isLoading ? "发送中..." : "发送"}
-        </button>
+        {/* 跑着的时候这个位置变成"停止"。取消是协作式的：点下去只是**请求**停止，
+            真正停下要等到下一个步边界（服务端每次调模型前、每条工具调用前才检查），
+            所以文案要能显示"正在停止…"—— 否则用户会以为按钮没生效。
+            type="button" 是必须的：不能让它提交表单。 */}
+        {isLoading ? (
+          <button
+            type="button"
+            className="primary-button"
+            onClick={onStop}
+            disabled={isStopping}
+          >
+            {isStopping ? "正在停止…" : "停止"}
+          </button>
+        ) : (
+          <button type="submit" className="primary-button" disabled={!canSend}>
+            发送
+          </button>
+        )}
       </div>
     </form>
   );

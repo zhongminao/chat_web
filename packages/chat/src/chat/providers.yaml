@@ -17,12 +17,12 @@
 
 providers:
   gpt:
-    display_name: GPT (忘川_网关)
+    display_name: GPT (passion8_网关)
     api_key_env: GPT_API_KEY
     # 必须带 /v1：客户端会在这个地址后面直接接 "chat/completions"，
     # 少了 /v1 会打到 https://image.123uq.com/chat/completions，被网关挡回 451。
     # （DeepSeek 那条不写 /v1 也能通，是各家网关规矩不同，不能照抄。）
-    base_url: https://image.123uq.com/v1
+    base_url: https://passion8.cc/v1 # https://image.123uq.com/v1
     models:
       - id: gpt-5.5
         name: GPT-5.5

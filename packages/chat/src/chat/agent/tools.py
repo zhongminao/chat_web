@@ -1,10 +1,15 @@
 import inspect
 import json
+import os
+import signal
 import subprocess
+import time
+import uuid
 from pathlib import Path
 
-from chat.agent.observed import guard as guard_mutation
-from chat.agent.observed import remember as remember_observed
+from chat.agent import bash_audit
+from chat.agent.observed import ObservationContext
+from chat.agent.sandbox import DEFAULT_SANDBOX_MODE, SandboxPolicy, check_path, normalize_mode
 from chat.agent.spill import save as save_spill
 
 # 工具输出的内联上限。bash 按整体掐（超长另存 spill 文件）；read_file 按行分页，
@@ -19,6 +24,31 @@ BASH_OUTPUT_TAIL = 300
 READ_LINE_LIMIT = 200
 READ_LINE_HEAD = 130
 READ_LINE_TAIL = 70
+
+# run_bash 的时限：默认 60 秒，最长 3600 秒。
+#
+# 这一对与上面那些输出上限**性质不同**：它要写进 schema。模型得知道"不传会怎样、
+# 传太大会怎样"，才谈得上要不要显式给值 —— 而输出上限只要说"超长会截断"就够，
+# 具体数字对模型没用。上面那条"不要写具体数字"防的是**抄死的字面量**过期；
+# 这里 schema 里那句是用 f-string 从下面这两个变量**生成**的，不是另抄一份，
+# 所以改了值描述跟着变，过期依然不成立。
+BASH_TIMEOUT_DEFAULT = 60
+BASH_TIMEOUT_MAX = 3600
+
+def _clamp_bash_timeout(timeout)->int:
+    """把模型给的 timeout 收进 [1, BASH_TIMEOUT_MAX]；缺失或非法一律回默认值。
+
+    模型这一侧不可信：小模型会传字符串、0、负数、几百万秒。这里**刻意不报错**，
+    静默夹进合法区间 —— 超时只是个旋钮，不值得为它废掉整条命令。
+    字符串形态（"120"）在 execute_tool 的 _NUMERIC_FIELDS 那一步已转成 int，
+    这里只兜剩下的。**上限因此是硬性的**：模型给多大都越不过 BASH_TIMEOUT_MAX。
+    """
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+        return BASH_TIMEOUT_DEFAULT
+    # NaN 与任何值比较都是 False，所以 <= 0 拦不住它；JSON 里确实能写出 NaN。
+    if timeout != timeout or timeout <= 0:
+        return BASH_TIMEOUT_DEFAULT
+    return min(int(timeout), BASH_TIMEOUT_MAX)
 
 
 # ---------------------------------------------------------------------------
@@ -43,16 +73,10 @@ def root_dir(root: "str | Path | None") -> Path:
     return Path(root).expanduser().resolve()
 
 
-def resolve_path(path: "str | Path", root: "str | Path | None") -> Path:
-    """相对路径按 root 解析，绝对路径原样。返回规范化的绝对路径。
-
-    规范化是必须的，不只是好看：observed 守卫按路径记"读过没读过"，`a.txt` 和
-    `/root/a.txt` 必须是同一个 key —— 否则模型换个写法就能绕过"先读后改"。
-    """
-    target = Path(path).expanduser()
-    if not target.is_absolute():
-        target = root_dir(root) / target
-    return target.resolve()
+def resolve_path(path: "str | Path", root: "str | Path | None",
+                 *, sandbox_mode: str | None = DEFAULT_SANDBOX_MODE) -> Path:
+    """相对路径按 root 解析，并按 sandbox 模式检查最终真实路径。"""
+    return check_path(path, SandboxPolicy(normalize_mode(sandbox_mode), root_dir(root)))
 
 READ_FILE_SCHEMA = {
     "type": "function",
@@ -124,12 +148,53 @@ EDIT_FILE_SCHEMA = {
     },
 }
 
+PLAN_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "plan",
+        "description": (
+            "Create or replace the current task checklist for longer multi-step work. "
+            "Use it when the task has several dependent steps, may need investigation and verification, "
+            "or will take enough tool work that visible progress helps. Do not use it for simple questions "
+            "or single-step edits. Send the complete checklist every time; the latest call is the current plan."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "todos": {
+                    "type": "array",
+                    "description": "Complete task checklist in display order.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "content": {
+                                "type": "string",
+                                "description": "Short user-visible task description.",
+                            },
+                            "status": {
+                                "type": "string",
+                                "enum": ["pending", "in_progress", "completed"],
+                                "description": "Current task status.",
+                            },
+                        },
+                        "required": ["content", "status"],
+                    },
+                },
+            },
+            "required": ["todos"],
+        },
+    },
+}
+
 RUN_BASH_SCHEMA = {
     "type": "function",
     "function": {
         "name": "run_bash",
         "description": (
             "Run a bash command and return combined stdout/stderr. "
+            "In full-access mode the command runs immediately. In workspace-write mode it "
+            "creates a one-time approval request for this exact command and pauses; approval "
+            "runs only this command and does not switch the session to full-access. "
             "Use for listing files, searching (grep), git, or running programs. "
             "Output that is too long is elided in the middle — you get the "
             "beginning and the end — but it is never lost: the full text is saved "
@@ -146,7 +211,11 @@ RUN_BASH_SCHEMA = {
                 },
                 "timeout": {
                     "type": "integer",
-                    "description": "Timeout in seconds.",
+                    "description": (
+                        f"Timeout in seconds. Defaults to {BASH_TIMEOUT_DEFAULT}; "
+                        f"anything larger is capped at {BASH_TIMEOUT_MAX}. "
+                        "The whole process group is killed on expiry."
+                    ),
                 },
             },
             "required": ["command"],
@@ -202,8 +271,9 @@ def _elide_line(line:str)->str:
     )
 
 
-def read_file(path:str,offset=1,limit=500,*,root=None)->str:
-    target = resolve_path(path, root)
+def read_file(path:str,offset=1,limit=500,*,root=None,observed:ObservationContext,
+              sandbox_mode: str | None = DEFAULT_SANDBOX_MODE)->str:
+    target = resolve_path(path, root, sandbox_mode=sandbox_mode)
     if offset < 1:
         offset = 1
     if limit <= 0:
@@ -218,6 +288,9 @@ def read_file(path:str,offset=1,limit=500,*,root=None)->str:
     total = len(lines)
 
     if total == 0:
+        # 空文件也要记：以前这里直接 return，于是"读过空文件"不算观测到，
+        # 后面一次 write_file 会被守卫拦成 not read yet —— 读过了却说不算，没道理。
+        observed.remember(target, lines=0)
         return f"[read_file] {target}: empty file (0 lines)"
 
     if offset > total:
@@ -227,15 +300,16 @@ def read_file(path:str,offset=1,limit=500,*,root=None)->str:
     chunk = lines[start:start+limit]
     end = start + len(chunk)
     body = "\n".join(_elide_line(line) for line in chunk)
-    remember_observed(target, lines=total)
+    observed.remember(target, lines=total)
     result = f"[read_file] {target} ({total} lines total, showing lines {start + 1}-{end})\n{body}"
     if end < total:
         result += f"\n...[{total - end} more lines in file. Use offset={end + 1} to continue.]"
     return result
 
-def edit_file(path:str,old_text:str,new_text:str,*,root=None)->str:
-    target = resolve_path(path, root)
-    reason = guard_mutation(target)
+def edit_file(path:str,old_text:str,new_text:str,*,root=None,observed:ObservationContext,
+              sandbox_mode: str | None = DEFAULT_SANDBOX_MODE)->str:
+    target = resolve_path(path, root, sandbox_mode=sandbox_mode)
+    reason = observed.guard(target)
     if reason:
         raise ValueError(f"cannot edit {target}: {reason}")
     try:
@@ -253,7 +327,7 @@ def edit_file(path:str,old_text:str,new_text:str,*,root=None)->str:
     updated = content.replace(old_text,new_text,1)
     with open(target,"w",encoding="utf-8") as f:
         f.write(updated)
-    remember_observed(target, lines=len(updated.splitlines()))
+    observed.remember(target, lines=len(updated.splitlines()))
     return f"[edit_file] '{old_text}' replaced with '{new_text}' in {target}"
 
 def _elide_middle(text:str,limit:int=BASH_OUTPUT_LIMIT)->str:
@@ -271,28 +345,145 @@ def _elide_middle(text:str,limit:int=BASH_OUTPUT_LIMIT)->str:
     )
 
 
-def run_bash(command:str,timeout:int=60,*,root=None)->str:
-    cwd = root_dir(root)
+def _group_alive(pgid: int) -> bool:
+    """这个进程组里还有活着的进程吗？（信号 0 = 只探测，不真发信号。）"""
     try:
-        result = subprocess.run(
+        os.killpg(pgid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _kill_group(proc: "subprocess.Popen[str]", grace: float = 3.0) -> None:
+    """先 SIGTERM **整个进程组**，宽限之后还活着就 SIGKILL。
+
+    为什么必须是进程组而不是 proc.kill()：proc 只是 /bin/bash，命令里启动的东西
+    （`cmd &`、管道里的下一段、sleep …）都是它的孩子，**杀 bash 不会连带动它们** ——
+    那些进程变成孤儿继续活着。实测过：`timeout` 一到，`sleep 30 &` 留下的进程还在。
+    start_new_session=True 让子进程自成一组，killpg 才能一次收干净。
+
+    阶梯（TERM → 宽限 → KILL）是给它一个自己收尾的机会：一个正在写文件的命令收到
+    SIGTERM 会去清理，直接 KILL 就可能留下半个文件。
+
+    判断"还在不在"看的是**组**而不是 proc.wait()：bash 死了但某个忽略 SIGTERM 的
+    后代还活着时，后者才是要继续升级的理由。
+
+    ⚠️ 等的时候必须 `proc.poll()` 收尸。**僵尸进程在进程组里仍然算"存在"** ——
+    不收的话 killpg(pgid, 0) 一直说"还活着"，整个阶梯会傻等满两轮宽限（实测 6 秒，
+    而真正该花的是 0.1 秒）。
+    """
+    try:
+        pgid = os.getpgid(proc.pid)
+    except OSError:
+        return
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try:
+            os.killpg(pgid, sig)
+        except OSError:
+            return                      # 组里已经没进程了
+        deadline = time.monotonic() + grace
+        while time.monotonic() < deadline:
+            proc.poll()                 # ← 收僵尸，否则下面永远是 True
+            if not _group_alive(pgid):
+                return
+            time.sleep(0.05)
+
+
+def run_bash(command:str,timeout:int=BASH_TIMEOUT_DEFAULT,*,root=None,should_stop=None,
+             sandbox_mode: str | None = DEFAULT_SANDBOX_MODE, audit_root=None,
+             audit_session_id: str | None = None, approved_request_id: str | None = None)->str:
+    """跑一条命令。返回文本，**从不抛异常**（取消和超时都走正常返回）。
+
+    timeout: 秒。缺省用 BASH_TIMEOUT_DEFAULT，超过 BASH_TIMEOUT_MAX 会被夹住
+        （两个变量都在文件顶部），由 _clamp_bash_timeout 收口 —— 模型传 0、负数、
+        垃圾都回默认值，不报错。**上限是硬性的**：模型给多大都越不过它。
+
+    should_stop: 宿主注入的取消轮询函数（同 root，模型给不了）。给了就每 0.2 秒
+        看一眼 —— 用户点了停止时**正在跑的命令**也能被收掉，不必等它自己结束。
+        没有它的话，"停止"最多要等一条 `sleep 200` 跑完，界面上看起来就是没反应。
+
+    超时和取消都杀**整个进程组**（见 _kill_group），所以命令启动的后台进程不会
+    留下来变成孤儿。
+    """
+    timeout = _clamp_bash_timeout(timeout)
+    mode = normalize_mode(sandbox_mode)
+    cwd = root_dir(root)
+    audit_event = {
+        "sessionId": audit_session_id,
+        "requestId": approved_request_id,
+        "sandboxMode": mode,
+        "cwd": str(cwd),
+        "command": command,
+        "timeout": timeout,
+    }
+    if mode != "full-access":
+        request_id = f"bashreq-{uuid.uuid4().hex[:12]}"
+        payload = {
+            "id": request_id,
+            "command": command,
+            "cwd": str(cwd),
+            "timeout": timeout,
+            "note": (
+                "Not executed yet — this command is waiting for the user to approve it. "
+                "The turn is paused here. Do not retry it and do not claim it ran."
+            ),
+        }
+        message = "run_bash requires one-time approval in workspace-write mode"
+        bash_audit.append(audit_root, {
+            **audit_event,
+            "requestId": request_id,
+            "status": "requested",
+            "reason": message,
+        })
+        return f"{BASH_REQUEST_PREFIX}{json.dumps(payload, ensure_ascii=False)}"
+    try:
+        proc = subprocess.Popen(
             command,
             shell=True,
             executable="/bin/bash",
-            capture_output=True,
+            # stderr 并到 stdout：模型只看一份输出，和以前 capture_output 的合并一致
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=timeout,
             cwd=str(cwd),
+            start_new_session=True,      # 自成进程组，取消/超时才能连带后代一起收
         )
-    except subprocess.TimeoutExpired:
-        return f"$ {command}\n[timed out after {timeout}s]"
     except OSError as exc:
         # 工作目录没了（比如工作区目录被人在磁盘上删了）——说清是目录的问题，
         # 别说成命令的问题，否则模型会去改命令然后一直失败。
+        bash_audit.append(audit_root, {**audit_event, "spawnError": str(exc)})
         return f"$ {command}\n[cannot run in {cwd}: {exc}]"
 
-    text = (result.stdout or "") + (result.stderr or "")
+    deadline = time.monotonic() + max(timeout, 1)
+    stopped: str | None = None
+    text = ""
+    while True:
+        # 取消优先于超时：用户点了停止，就不该再等这条命令跑完。
+        # 0.2 秒一轮 —— 比一次模型调用短得多，用户感知不到这个延迟。
+        if should_stop is not None and (reason := should_stop()):
+            stopped = f"cancelled: {reason}"
+            break
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            stopped = f"timed out after {timeout}s"
+            break
+        try:
+            # TimeoutExpired 之后可以继续 communicate，已读到的输出不会丢
+            text = proc.communicate(timeout=min(0.2, remaining))[0] or ""
+            break
+        except subprocess.TimeoutExpired:
+            continue
+
+    if stopped is not None:
+        _kill_group(proc)
+        try:
+            text = (text or "") + (proc.communicate(timeout=5)[0] or "")
+        except subprocess.TimeoutExpired:
+            text = text or ""
+
+    text = text or ""
     hint = ""
     if len(text) > BASH_OUTPUT_LIMIT:
         preview = _elide_middle(text)
@@ -307,11 +498,22 @@ def run_bash(command:str,timeout:int=60,*,root=None)->str:
                 f"it with run_bash.]"
             )
         text = preview
-    return f"$ {command}\n{text}[exit code: {result.returncode}]{hint}"
 
-def write_file(path:str,content:str,*,root=None)->str:
-    p = resolve_path(path, root)
-    reason = guard_mutation(p)
+    # 状态行：正常退出报退出码；被取消/超时则说明原因（那时退出码是信号值，
+    # 报 -15 之类的数字对模型没有意义）。
+    status = f"[{stopped}]" if stopped is not None else f"[exit code: {proc.returncode}]"
+    bash_audit.append(audit_root, {
+        **audit_event,
+        "stopped": stopped,
+        "exitCode": proc.returncode,
+        "outputChars": len(text),
+    })
+    return f"$ {command}\n{text}{status}{hint}"
+
+def write_file(path:str,content:str,*,root=None,observed:ObservationContext,
+               sandbox_mode: str | None = DEFAULT_SANDBOX_MODE)->str:
+    p = resolve_path(path, root, sandbox_mode=sandbox_mode)
+    reason = observed.guard(p)
     if reason:
         raise ValueError(f"cannot write {p}: {reason}")
     p.parent.mkdir(parents = True,exist_ok=True)
@@ -320,8 +522,28 @@ def write_file(path:str,content:str,*,root=None)->str:
             f.write(content)
     except OSError as exc:
         raise ValueError(f"write {p} failed: {exc}")
-    remember_observed(p, lines=len(content.splitlines()))
+    observed.remember(p, lines=len(content.splitlines()))
     return f"[write_file] {p} written"
+
+
+def plan(todos:list)->str:
+    """记录当前任务清单。第一次调用就是创建，之后调用就是替换当前计划。"""
+    if not isinstance(todos, list):
+        raise ValueError("todos must be a list")
+    allowed = {"pending", "in_progress", "completed"}
+    normalized = []
+    for index, item in enumerate(todos, 1):
+        if not isinstance(item, dict):
+            raise ValueError(f"todos[{index}] must be an object")
+        content = str(item.get("content") or "").strip()
+        status = str(item.get("status") or "").strip()
+        if not content:
+            raise ValueError(f"todos[{index}].content is required")
+        if status not in allowed:
+            raise ValueError(f"todos[{index}].status must be one of {sorted(allowed)}")
+        normalized.append({"content": content, "status": status})
+    payload = {"todos": normalized}
+    return f"{PLAN_UPDATE_PREFIX}{json.dumps(payload, ensure_ascii=False)}"
 
 # ---------------------------------------------------------------------------
 # 分发入口：模型说"调 read_file" → 找到函数 → 解析参数 → 执行
@@ -333,6 +555,7 @@ _TOOL_FUNCS = {
     "write_file": write_file,
     "edit_file": edit_file,
     "run_bash": run_bash,
+    "plan": plan,
 }
 
 # 这些数值参数，小模型经常传成字符串（"10" 而不是 10），分发时统一转 int
@@ -340,24 +563,36 @@ _NUMERIC_FIELDS = {"offset", "limit", "timeout"}
 
 # 由**调用方**注入、不许模型自己给的参数。
 #
-# 分发时是按函数签名过滤模型给的 JSON 的（挡掉 schema 外的多余字段）。root 也在签名里，
-# 不排除掉的话模型塞一个 "root": "/" 就能把它自己的基准目录改掉 —— 基准目录必须
-# 由宿主决定，这条不能交给模型。以后再有这类参数，加进这个集合。
-_INJECTED_ARGS = {"root"}
+# 分发时是按函数签名过滤模型给的 JSON 的（挡掉 schema 外的多余字段）。这三个都在
+# 签名里，不排除掉的话模型塞一个 "root": "/" 就能把它自己的基准目录改掉，塞一个
+# "should_stop" 就能把取消检查换掉 —— 基准目录和取消权必须由宿主决定，不能交给模型。
+# observed 同理：模型要是能自己挑 context，就能挑一个"已经读过"的上下文把守卫绕过去。
+_INJECTED_ARGS = {"root", "should_stop", "observed", "sandbox_mode", "audit_root", "audit_session_id", "approved_request_id"}
 
 # 工具失败的统一前缀。这是 tools.py 与 loop.py 之间的**契约**：
 # execute_tool 从不抛异常，所以 loop.py 判断不了成功与否，只能认这个前缀。
 # 抽成常量是为了别让两处各写一遍字符串 —— 格式一改，ok 字段会静默失效。
 TOOL_ERROR_PREFIX = "[tool error] "
+BASH_REQUEST_PREFIX = "[bash request] "
+PLAN_UPDATE_PREFIX = "[plan update] "
 
 
-def execute_tool(name: str, arguments_raw: str, *, root: "str | Path | None" = None) -> str:
+def execute_tool(name: str, arguments_raw: str, *, root: "str | Path | None" = None,
+                 should_stop=None, observed: ObservationContext,
+                 sandbox_mode: str | None = DEFAULT_SANDBOX_MODE,
+                 audit_root: "str | Path | None" = None,
+                 audit_session_id: str | None = None,
+                 approved_request_id: str | None = None) -> str:
     """执行一次工具调用，任何情况都返回文本，绝不抛异常。
 
     name: 工具名（模型给的 function.name）。
     arguments_raw: 模型给的参数，JSON 字符串（可能不合法，小模型常犯）。
     root: 基准目录 —— 相对路径按它解析、run_bash 在它里面执行。None 才是进程当前
           目录；服务端必须传工作区的根（见 root_dir 那段注释）。
+    should_stop: 取消轮询函数，宿主注入（同 root）。只有 run_bash 用它 —— 让一条
+          正在跑的命令也能被取消，而不是等它自己结束。
+    observed: **必填**。哪个执行上下文的观测状态（见 observed.ObservationContext）。
+          没有"默认context"可退回：拿不到就不该放行改文件。
 
     成功 → 执行函数自己的输出文本；
     失败 → TOOL_ERROR_PREFIX 开头的错误文本。错误会回喂给模型，让它能自救/重试。
@@ -382,8 +617,9 @@ def execute_tool(name: str, arguments_raw: str, *, root: "str | Path | None" = N
 
     # 2. 只保留函数签名里有的参数。
     #    模型常塞 schema 外的多余字段，直接 func(**args) 会 TypeError。
-    #    签名里但属于"宿主注入"的（root）也要排掉，见 _INJECTED_ARGS。
-    valid_names = set(inspect.signature(func).parameters) - _INJECTED_ARGS
+    #    签名里但属于"宿主注入"的（root / should_stop）也要排掉，见 _INJECTED_ARGS。
+    signature = inspect.signature(func)
+    valid_names = set(signature.parameters) - _INJECTED_ARGS
     args = {key: value for key, value in args.items() if key in valid_names}
 
     # 3. 数值字段若被传成字符串，转成 int（读文件/超时这类参数）
@@ -393,8 +629,27 @@ def execute_tool(name: str, arguments_raw: str, *, root: "str | Path | None" = N
             args[key] = int(value.strip())
 
     # 4. 执行。异常按类型给不同错误文本，模型能看到具体原因
+    #
+    # 宿主注入的参数按**签名**给：只有 run_bash 声明了 should_stop（长命令值得被取消），
+    # 另外三个是快操作，给它们塞这个参数会直接 TypeError。以后哪个工具需要取消能力，
+    # 在它自己的签名里加上就行，这里不用改。
+    injected: dict = {}
+    if "root" in signature.parameters:
+        injected["root"] = root
+    if "should_stop" in signature.parameters:
+        injected["should_stop"] = should_stop
+    if "observed" in signature.parameters:
+        injected["observed"] = observed
+    if "sandbox_mode" in signature.parameters:
+        injected["sandbox_mode"] = sandbox_mode
+    if "audit_root" in signature.parameters:
+        injected["audit_root"] = audit_root
+    if "audit_session_id" in signature.parameters:
+        injected["audit_session_id"] = audit_session_id
+    if "approved_request_id" in signature.parameters:
+        injected["approved_request_id"] = approved_request_id
     try:
-        return func(**args, root=root)
+        return func(**args, **injected)
     except TypeError as exc:
         return f"{TOOL_ERROR_PREFIX}bad arguments for {name}: {exc}"
     except ValueError as exc:
@@ -403,14 +658,34 @@ def execute_tool(name: str, arguments_raw: str, *, root: "str | Path | None" = N
         return f"{TOOL_ERROR_PREFIX}{name} crashed: {exc}"
 
 
-def make_executor(root: "str | Path | None"):
-    """把 root 绑进一个 (name, arguments_raw) -> str 的回调，交给 run_agent_turn。
+def make_executor(root: "str | Path | None", observed: ObservationContext, *,
+                  should_stop=None, sandbox_mode: str | None = DEFAULT_SANDBOX_MODE,
+                  audit_root: "str | Path | None" = None,
+                  audit_session_id: str | None = None):
+    """把宿主的东西绑进一个 (name, arguments_raw) -> str 的回调，交给 run_agent_turn。
 
-    loop 只管"调模型、跑工具、回喂"，不该知道文件系统的基准在哪；基准由调用方在这里绑好。
-    服务端绑工作区的根，评估绑临时目录。
+    loop 只管"调模型、跑工具、回喂"，不该知道文件系统的基准在哪、观测状态属于哪个
+    上下文、也不该知道怎么取消；这些都由调用方在这里绑好：服务端绑工作区的根 +
+    这一场的 observed context + 这一轮的取消令牌，评估绑临时目录 + 一次 case 的 context。
+
+    should_stop 一路传到 run_bash —— 没有它，用户点停止之后一条正在跑的 `sleep 200`
+    只能等它自己结束（界面上看起来就是"没反应"）。
+
+    observed **必填**：不传就等于"没有上下文"，那正好是以前跨会话串味的老路。
+    没有会话身份的调用方用 observed.REGISTRY.new_context() 开一个一次性的，
+    不要退回某张共享表。
     """
     def _executor(name: str, arguments_raw: str) -> str:
-        return execute_tool(name, arguments_raw, root=root)
+        return execute_tool(
+            name,
+            arguments_raw,
+            root=root,
+            should_stop=should_stop,
+            observed=observed,
+            sandbox_mode=sandbox_mode,
+            audit_root=audit_root,
+            audit_session_id=audit_session_id,
+        )
     return _executor
 
 TOOL_SCHEMAS = [
@@ -418,4 +693,5 @@ TOOL_SCHEMAS = [
     WRITE_FILE_SCHEMA,
     EDIT_FILE_SCHEMA,
     RUN_BASH_SCHEMA,
+    PLAN_SCHEMA,
 ]
